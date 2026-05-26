@@ -7,18 +7,8 @@ using Siemens.Engineering;
 using Siemens.Engineering.HW;
 
 /// <summary>
-/// TIA Portal Hardware Catalog Extractor
-/// Extracts hardware configuration (modules, order numbers, firmware, network info).
-///
-/// Compile for TIA Portal V18-V19:
-///   csc.exe /reference:"...\Siemens.Engineering.dll" /out:tia_extract_hardware.exe tia_extract_hardware.cs
-///
-/// Compile for TIA Portal V21+:
-///   csc.exe /reference:"...\Siemens.Engineering.Base.dll" /reference:"...\Siemens.Engineering.Step7.dll"
-///     /out:tia_extract_hardware.exe tia_extract_hardware.cs
-///
-/// Run (TIA Portal must be open with project loaded):
-///   tia_extract_hardware.exe [output_json] [device_filter]
+/// TIA Portal Hardware Catalog Extractor - IP Diagnostic
+/// Focuses on finding where IP addresses are stored for PLC/HMI/IO devices.
 /// </summary>
 class Program
 {
@@ -54,9 +44,20 @@ class Program
         string outputPath = (args.Length > 0) ? args[0] : "Doc_OUTPUT/.hardware.json";
         string deviceFilter = (args.Length > 1) ? args[1] : "";
 
-        if (!string.IsNullOrEmpty(deviceFilter))
-            Console.WriteLine("Device filter: " + deviceFilter);
+        // ── IP DIAGNOSTIC: Walk ALL items and dump full network info ──
+        Console.WriteLine("[IP DIAGNOSTIC - checking ALL network interfaces]");
+        foreach (Device device in project.Devices)
+        {
+            Console.WriteLine("Device: " + device.Name);
+            foreach (DeviceItem item in device.DeviceItems)
+            {
+                DumpNetworkInfo(item, "  ");
+            }
+        }
+        Console.WriteLine("[END IP DIAGNOSTIC]");
+        Console.WriteLine();
 
+        // Build JSON
         json.AppendLine("{");
         json.AppendLine("  \"extraction_info\": {");
         json.AppendLine("    \"tool\": \"tia_extract_hardware.cs\",");
@@ -72,8 +73,6 @@ class Program
         {
             if (!string.IsNullOrEmpty(deviceFilter) && !device.Name.Contains(deviceFilter))
                 continue;
-
-            Console.WriteLine("Device: " + device.Name);
 
             if (!firstDevice) json.AppendLine(",");
             firstDevice = false;
@@ -114,6 +113,162 @@ class Program
         return 0;
     }
 
+    static void DumpNetworkInfo(DeviceItem item, string prefix)
+    {
+        // Check if this item has NetworkInterface
+        object niObj = null;
+        try
+        {
+            foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+            {
+                try
+                {
+                    var t = asm.GetType("Siemens.Engineering.HW.Features.NetworkInterface");
+                    if (t != null)
+                    {
+                        var method = item.GetType().GetMethod("GetService");
+                        if (method != null)
+                        {
+                            var generic = method.MakeGenericMethod(t);
+                            niObj = generic.Invoke(item, null);
+                        }
+                        break;
+                    }
+                }
+                catch { }
+            }
+        }
+        catch { }
+
+        if (niObj != null)
+        {
+            Console.WriteLine("{0}[NI] {1} has NetworkInterface", prefix, item.Name);
+
+            var nodesProp = niObj.GetType().GetProperty("Nodes");
+            if (nodesProp != null)
+            {
+                var nodes = nodesProp.GetValue(niObj) as IEnumerable;
+                int nodeIdx = 0;
+                foreach (var node in nodes)
+                {
+                    Console.WriteLine("{0}  Node[{1}]:", prefix, nodeIdx);
+
+                    // Dump ALL properties including from interfaces
+                    foreach (var p in node.GetType().GetProperties())
+                    {
+                        try
+                        {
+                            var val = p.GetValue(node);
+                            string vs = (val != null) ? val.ToString() : "(null)";
+                            if (vs.Length > 100) vs = vs.Substring(0, 100) + "...";
+                            Console.WriteLine("{0}    {1} ({2}): {3}", prefix, p.Name, p.PropertyType.Name, vs);
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine("{0}    {1}: ERROR: {2}", prefix, p.Name, ex.Message);
+                        }
+                    }
+
+                    // Check interface properties too
+                    foreach (var iface in node.GetType().GetInterfaces())
+                    {
+                        foreach (var p in iface.GetProperties())
+                        {
+                            try
+                            {
+                                var val = p.GetValue(node);
+                                string vs = (val != null) ? val.ToString() : "(null)";
+                                if (vs.Length > 100) vs = vs.Substring(0, 100) + "...";
+                                Console.WriteLine("{0}    [I] {1} ({2}): {3}", prefix, p.Name, p.PropertyType.Name, vs);
+                            }
+                            catch { }
+                        }
+                    }
+
+                    // If ConnectedSubnet is not null, dump it
+                    try
+                    {
+                        var csProp = node.GetType().GetProperty("ConnectedSubnet");
+                        if (csProp != null)
+                        {
+                            var cs = csProp.GetValue(node);
+                            if (cs != null)
+                            {
+                                Console.WriteLine("{0}    ConnectedSubnet properties:", prefix);
+                                foreach (var p in cs.GetType().GetProperties())
+                                {
+                                    try
+                                    {
+                                        var val = p.GetValue(cs);
+                                        string vs = (val != null) ? val.ToString() : "(null)";
+                                        if (vs.Length > 100) vs = vs.Substring(0, 100) + "...";
+                                        Console.WriteLine("{0}      {1} ({2}): {3}", prefix, p.Name, p.PropertyType.Name, vs);
+                                    }
+                                    catch { }
+                                }
+                            }
+                        }
+                    }
+                    catch { }
+
+                    nodeIdx++;
+                }
+            }
+
+            // Also dump NI object's own properties
+            Console.WriteLine("{0}  NetworkInterface properties:", prefix);
+            foreach (var p in niObj.GetType().GetProperties())
+            {
+                try
+                {
+                    var val = p.GetValue(niObj);
+                    string vs = (val != null) ? val.ToString() : "(null)";
+                    if (vs.Length > 80) vs = vs.Substring(0, 80) + "...";
+                    Console.WriteLine("{0}    {1} ({2}): {3}", prefix, p.Name, p.PropertyType.Name, vs);
+                }
+                catch { }
+            }
+        }
+
+        // Check Addresses collection
+        try
+        {
+            var addrProp = item.GetType().GetProperty("Addresses");
+            if (addrProp != null)
+            {
+                var addrs = addrProp.GetValue(item) as IEnumerable;
+                if (addrs != null)
+                {
+                    int addrCount = 0;
+                    foreach (var addr in addrs)
+                    {
+                        if (addrCount == 0)
+                            Console.WriteLine("{0}[ADDR] {1} has addresses:", prefix, item.Name);
+                        string addrStr = "";
+                        foreach (var p in addr.GetType().GetProperties())
+                        {
+                            try
+                            {
+                                var v = p.GetValue(addr);
+                                addrStr += p.Name + "=" + ((v != null) ? v.ToString() : "(null)") + " ";
+                            }
+                            catch { }
+                        }
+                        Console.WriteLine("{0}  {1}", prefix, addrStr.Trim());
+                        addrCount++;
+                    }
+                }
+            }
+        }
+        catch { }
+
+        // Recurse
+        foreach (DeviceItem sub in item.DeviceItems)
+        {
+            DumpNetworkInfo(sub, prefix + "  ");
+        }
+    }
+
     static void WalkDeviceItem(DeviceItem item, ref bool firstModule, int depth)
     {
         string itemName = item.Name;
@@ -124,13 +279,10 @@ class Program
         string subnet = "";
         string profinetName = "";
         string networkType = "";
-        string comment = "";
         int positionNumber = 0;
 
-        // TypeIdentifier property
         try { typeId = item.TypeIdentifier ?? ""; } catch { }
 
-        // Order number — GetAttribute
         try
         {
             var v = item.GetAttribute("OrderNumber");
@@ -138,14 +290,12 @@ class Program
         }
         catch { }
 
-        // Fallback: parse from TypeIdentifier (format: "OrderNumber:6ES7 xxx/SW Vx.x ...")
         if (string.IsNullOrEmpty(orderNum) && typeId.StartsWith("OrderNumber:"))
         {
             int slash = typeId.IndexOf('/');
             orderNum = (slash > 0) ? typeId.Substring(12, slash - 12) : typeId.Substring(12);
         }
 
-        // Firmware version — GetAttribute
         try
         {
             var v = item.GetAttribute("FirmwareVersion");
@@ -153,15 +303,6 @@ class Program
         }
         catch { }
 
-        // Comment — GetAttribute
-        try
-        {
-            var v = item.GetAttribute("Comment");
-            if (v != null && v.ToString().Length > 0) comment = v.ToString();
-        }
-        catch { }
-
-        // Position number — property
         try { positionNumber = item.PositionNumber; } catch { }
 
         // Network interface via runtime reflection
@@ -178,18 +319,14 @@ class Program
                     {
                         foreach (var node in nodes)
                         {
-                            // PROFINET name and network info from node properties
                             profinetName = TryGet(node, new[] { "Name" });
-
-                            // Network type (Ethernet, Mpi, Profibus, etc.)
                             networkType = TryGet(node, new[] { "NodeType" });
-                            if (!string.IsNullOrEmpty(networkType))
-                                networkType = networkType.ToLower();
 
-                            // IP address — try all possible property names
+                            // Try to get IP from ALL possible sources
                             ipAddress = TryGet(node, new[] { "IpV4Address", "IpAddress", "IPAddress" });
+                            subnet = TryGet(node, new[] { "IpV4SubnetMask", "SubnetMask" });
 
-                            // Try ConnectedSubnet for IP info
+                            // Try ConnectedSubnet
                             if (string.IsNullOrEmpty(ipAddress))
                             {
                                 try
@@ -200,16 +337,12 @@ class Program
                                         var cs = csProp.GetValue(node);
                                         if (cs != null)
                                         {
-                                            ipAddress = TryGet(cs, new[] { "IpV4SubnetAddress", "Address" });
-                                            subnet = TryGet(cs, new[] { "IpV4SubnetMask", "SubnetMask" });
+                                            ipAddress = TryGet(cs, new[] { "IpV4SubnetAddress", "Address", "IpAddress" });
+                                            subnet = TryGet(cs, new[] { "IpV4SubnetMask", "SubnetMask", "Mask" });
                                         }
                                     }
                                 }
                                 catch { }
-                            }
-                            else
-                            {
-                                subnet = TryGet(node, new[] { "IpV4SubnetMask", "SubnetMask" });
                             }
 
                             break;
@@ -220,7 +353,6 @@ class Program
         }
         catch { }
 
-        // Include items with useful info or network interfaces
         bool hasInfo = !string.IsNullOrEmpty(orderNum) || !string.IsNullOrEmpty(ipAddress)
                      || !string.IsNullOrEmpty(firmware) || !string.IsNullOrEmpty(profinetName)
                      || (!string.IsNullOrEmpty(typeId) && !typeId.StartsWith("System:"));
@@ -247,12 +379,9 @@ class Program
                 json.AppendLine(indent + "  \"profinet_name\": " + J(profinetName) + ",");
             if (!string.IsNullOrEmpty(networkType))
                 json.AppendLine(indent + "  \"network_type\": " + J(networkType) + ",");
-            if (!string.IsNullOrEmpty(comment))
-                json.AppendLine(indent + "  \"comment\": " + J(comment) + ",");
             if (positionNumber > 0)
                 json.AppendLine(indent + "  \"position\": " + positionNumber + ",");
 
-            // Remove trailing comma
             string lastLine = json.ToString().TrimEnd();
             if (lastLine.EndsWith(","))
             {
@@ -270,14 +399,11 @@ class Program
             moduleCount++;
         }
 
-        // Recurse into sub-items
         foreach (DeviceItem sub in item.DeviceItems)
         {
             WalkDeviceItem(sub, ref firstModule, depth + 1);
         }
     }
-
-    // ── Helpers ──────────────────────────────────────────────────────────
 
     static object ReflectGetService(DeviceItem item, string typeName)
     {
@@ -313,7 +439,6 @@ class Program
                     var v = p.GetValue(o);
                     if (v != null) return v.ToString();
                 }
-                // Also check interfaces
                 foreach (var iface in o.GetType().GetInterfaces())
                 {
                     p = iface.GetProperty(n);
