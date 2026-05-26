@@ -1,0 +1,71 @@
+{
+  "name": "tia-toolkit-vscode",
+  "displayName": "TIA Toolkit",
+  "description": "Extract PLC/HMI data from Siemens TIA Portal projects",
+  "version": "0.2.0",
+  "publisher": "tia-toolkit",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./out/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "tia-toolkit-sidebar",
+          "title": "TIA Toolkit",
+          "icon": "resources/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "tia-toolkit-sidebar": [
+        {
+          "type": "webview",
+          "id": "tiaToolkit.sidebar",
+          "name": "TIA Toolkit"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "tiaToolkit.open",
+        "title": "TIA Toolkit: Open"
+      }
+    ],
+    "configuration": {
+      "title": "TIA Toolkit",
+      "properties": {
+        "tiaToolkit.toolkitPath": {
+          "type": "string",
+          "default": "",
+          "description": "Absolute path to the TIA Toolkit root folder (e.g. D:\\Tools\\Extract_PLC_Data_GUI)"
+        },
+        "tiaToolkit.pythonPath": {
+          "type": "string",
+          "default": "py",
+          "description": "Python executable (use 'py' on Windows, 'python3' elsewhere)"
+        },
+        "tiaToolkit.autoSync": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-copy Doc_OUTPUT from toolkit to workspace after extraction"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.4.0"
+  }
+}

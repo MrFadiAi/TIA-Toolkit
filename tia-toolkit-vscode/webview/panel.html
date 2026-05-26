@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';">
+    <link rel="stylesheet" href="panel.css">
+</head>
+<body>
+    <div class="app">
+        <!-- Header with version selector -->
+        <div class="header">
+            <h1 class="title">TIA Toolkit</h1>
+            <div class="version-selector">
+                <button class="seg-btn active" data-version="V21+">V21+</button>
+                <button class="seg-btn" data-version="V18-V19">V18-V19</button>
+            </div>
+        </div>
+
+        <!-- Tab bar -->
+        <div class="tab-bar">
+            <button class="tab-btn active" data-tab="plc">PLC Pipeline</button>
+            <button class="tab-btn" data-tab="hmi">HMI Pipeline</button>
+            <button class="tab-btn" data-tab="report">Report Viewer</button>
+        </div>
+
+        <!-- PLC Pipeline Tab -->
+        <div class="tab-content active" id="tab-plc">
+            <div class="step-group">
+                <div class="step-header">Step 1: Discover Devices</div>
+                <div class="step-row">
+                    <button class="btn" id="btn-list-devices">List Devices</button>
+                    <select class="select" id="plc-device-select">
+                        <option value="">-- select PLC --</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="step-group">
+                <div class="step-header">Step 1b: Compile Exporter (after code changes)</div>
+                <div class="step-row">
+                    <button class="btn" id="btn-compile-plc">Compile C# Exporter</button>
+                    <span class="status-label" id="plc-compile-status"></span>
+                </div>
+            </div>
+
+            <div class="step-group">
+                <div class="step-header">Step 2: Export PLC Blocks</div>
+                <div class="step-row">
+                    <input type="text" class="input" id="plc-output-path" placeholder="Output path...">
+                    <button class="btn btn-sm" id="btn-browse-plc">Browse</button>
+                    <button class="btn btn-primary" id="btn-export-blocks">Export Blocks</button>
+                </div>
+                <div class="warning">Requires TIA Portal running with project open</div>
+            </div>
+
+            <div class="step-group">
+                <div class="step-header">Step 3: Parse &amp; Generate Report</div>
+                <div class="step-row">
+                    <button class="btn" id="btn-parse-blocks">Parse Blocks</button>
+                    <button class="btn" id="btn-gen-plc-report">Generate Report</button>
+                    <button class="btn" id="btn-view-plc-report">View Report</button>
+                </div>
+            </div>
+
+            <div class="console-area" id="plc-console"></div>
+            <div class="progress-bar" id="plc-progress"></div>
+        </div>
+
+        <!-- HMI Pipeline Tab -->
+        <div class="tab-content" id="tab-hmi">
+            <div class="step-group">
+                <div class="step-header">Step 1: Select HMI Device</div>
+                <div class="step-row">
+                    <button class="btn" id="btn-list-hmi">List HMI Devices</button>
+                    <select class="select" id="hmi-device-select">
+                        <option value="">-- select --</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="step-group">
+                <div class="step-header">Step 2: Compile HMI Extractor (after code changes)</div>
+                <div class="step-row">
+                    <button class="btn" id="btn-compile-hmi">Compile HMI Extractor</button>
+                    <span class="status-label" id="hmi-compile-status"></span>
+                </div>
+            </div>
+
+            <div class="step-group">
+                <div class="step-header">Step 3: Extract HMI Data</div>
+                <div class="step-row">
+                    <button class="btn btn-primary" id="btn-extract-hmi">Extract HMI Data</button>
+                </div>
+                <div class="warning">Extracts elements, tags, events, navigation (requires TIA Portal running)</div>
+            </div>
+
+            <div class="step-group">
+                <div class="step-header">Step 4: Generate Report</div>
+                <div class="step-row">
+                    <button class="btn" id="btn-gen-hmi-report">Generate Report</button>
+                    <button class="btn" id="btn-view-hmi-report">View Report</button>
+                </div>
+            </div>
+
+            <div class="console-area" id="hmi-console"></div>
+            <div class="progress-bar" id="hmi-progress"></div>
+        </div>
+
+        <!-- Report Viewer Tab -->
+        <div class="tab-content" id="tab-report">
+            <div class="step-row report-toolbar">
+                <select class="select select-wide" id="report-select">
+                    <option value="">-- no reports --</option>
+                </select>
+                <button class="btn" id="btn-refresh-reports">Refresh</button>
+                <button class="btn" id="btn-open-editor">Open in Editor</button>
+                <button class="btn" id="btn-gen-claudemd">Generate CLAUDE.md</button>
+                <button class="btn" id="btn-export-bundle">Export Bundle</button>
+            </div>
+            <div class="report-content" id="report-content"></div>
+        </div>
+    </div>
+
+    <script src="panel.js"></script>
+</body>
+</html>

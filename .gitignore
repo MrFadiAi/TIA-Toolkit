@@ -1,0 +1,23 @@
+# Output
+Doc_OUTPUT/
+
+# Python
+__pycache__/
+*.pyc
+
+# IDE
+.vs/
+.idea/
+.claude/
+.understand-anything/
+
+# Node
+node_modules/
+
+# VS Code extension build
+tia-toolkit-vscode/out/
+tia-toolkit-vscode/.omc/
+tia-toolkit-vscode/*.vsix
+
+# Oh-my-claudecode
+.omc/
