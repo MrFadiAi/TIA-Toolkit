@@ -66,12 +66,22 @@ export function syncToWorkspace(toolkitDocOutput: string, workspaceDocOutput: st
         copied++;
     }
 
+    // analysis/
+    const srcAnalysis = path.join(toolkitDocOutput, 'analysis');
+    const dstAnalysis = path.join(workspaceDocOutput, 'analysis');
+    if (fs.existsSync(srcAnalysis)) {
+        const n = copyDirRecursive(srcAnalysis, dstAnalysis);
+        details.push(`analysis/ — ${n} files`);
+        copied += n;
+    }
+
     // JSON data files (rename dot-prefix for visibility)
     const jsonFiles: Record<string, string> = {
         '.plc_cache.json': 'plc_cache.json',
         '.hmi_merged.json': 'hmi_merged.json',
         '.hmi_online_data.json': 'hmi_online_data.json',
         'hmi_offline_data.json': 'hmi_offline_data.json',
+        '.hardware.json': 'hardware.json',
     };
     for (const [srcName, dstName] of Object.entries(jsonFiles)) {
         const src = path.join(toolkitDocOutput, srcName);

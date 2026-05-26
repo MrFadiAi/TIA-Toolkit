@@ -66,6 +66,7 @@ export function scanReports(docOutput: string): ReportEntry[] {
 
     walk(path.join(docOutput, 'hmi_screens'), 'hmi_screens');
     walk(path.join(docOutput, 'Program_Blocks'), 'Program_Blocks');
+    walk(path.join(docOutput, 'analysis'), 'analysis');
 
     const claudeMd = path.join(docOutput, 'CLAUDE.md');
     if (fs.existsSync(claudeMd)) {

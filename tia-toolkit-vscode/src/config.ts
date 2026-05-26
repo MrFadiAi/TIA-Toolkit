@@ -66,6 +66,27 @@ export function getExtractExe(srcDir: string, version: string): string {
     return path.join(srcDir, name);
 }
 
+export function getHardwareExe(srcDir: string): string {
+    return path.join(srcDir, 'tia_extract_hardware.exe');
+}
+
+export function getHardwareCompileCommand(srcDir: string, version: string): string[] {
+    const csc = 'C:\\Windows\\Microsoft.NET\\Framework64\\v4.0.30319\\csc.exe';
+    const out = path.join(srcDir, 'tia_extract_hardware.exe');
+    const cs = path.join(srcDir, 'tia_extract_hardware.cs');
+
+    if (version === 'V18-V19') {
+        const dll = 'C:\\Program Files\\Siemens\\Automation\\Portal V18\\PublicAPI\\V18\\Siemens.Engineering.dll';
+        return [csc, `/reference:${dll}`, `/out:${out}`, cs];
+    } else {
+        const base = 'C:\\Program Files\\Siemens\\Automation\\Portal V21\\PublicAPI\\V21\\net48';
+        return [csc,
+            `/reference:${base}\\Siemens.Engineering.Base.dll`,
+            `/reference:${base}\\Siemens.Engineering.Step7.dll`,
+            `/out:${out}`, cs];
+    }
+}
+
 export function getCompileCommand(
     srcDir: string, version: string, target: 'plc' | 'hmi'
 ): string[] {

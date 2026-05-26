@@ -112,6 +112,7 @@ var savedHmi = savedState.hmi || [];
 var savedPlcOutput = savedState.plcOutput || '';
 var savedPlcConsole = savedState.plcConsole || [];
 var savedHmiConsole = savedState.hmiConsole || [];
+var savedAnalysisConsole = savedState.analysisConsole || [];
 
 function saveState() {
     vscode.setState({
@@ -121,7 +122,8 @@ function saveState() {
         hmi: savedHmi,
         plcOutput: savedPlcOutput,
         plcConsole: savedPlcConsole,
-        hmiConsole: savedHmiConsole
+        hmiConsole: savedHmiConsole,
+        analysisConsole: savedAnalysisConsole
     });
 }
 
@@ -162,14 +164,15 @@ function appendConsole(text) {
     while (el.childElementCount > 10000) { el.removeChild(el.firstChild); }
     el.scrollTop = el.scrollHeight;
     if (activeTab === 'plc') { savedPlcConsole.push(text); if (savedPlcConsole.length > 1000) savedPlcConsole.shift(); }
-    else { savedHmiConsole.push(text); if (savedHmiConsole.length > 1000) savedHmiConsole.shift(); }
+    else if (activeTab === 'hmi') { savedHmiConsole.push(text); if (savedHmiConsole.length > 1000) savedHmiConsole.shift(); }
+    else { savedAnalysisConsole.push(text); if (savedAnalysisConsole.length > 1000) savedAnalysisConsole.shift(); }
     saveState();
 }
 
 function clearConsole() {
     var el = consoleEl();
     if (el) el.innerHTML = '';
-    if (activeTab === 'plc') savedPlcConsole = []; else savedHmiConsole = [];
+    if (activeTab === 'plc') savedPlcConsole = []; else if (activeTab === 'hmi') savedHmiConsole = []; else savedAnalysisConsole = [];
     saveState();
 }
 
@@ -271,6 +274,29 @@ document.getElementById('btn-export-bundle').addEventListener('click', function(
     action('exportBundle');
 });
 
+// ── Analysis tab buttons ─────────────────────────────────────────────────
+document.getElementById('btn-xref-search').addEventListener('click', function() {
+    var q = document.getElementById('xref-query').value;
+    var t = document.getElementById('xref-type').value;
+    if (!q) { appendConsole('Enter a search query.'); return; }
+    clearConsole(); setProgress(true); action('crossReference', { query: q, queryType: t });
+});
+document.getElementById('btn-dead-code').addEventListener('click', function() {
+    clearConsole(); setProgress(true); action('deadCode');
+});
+document.getElementById('btn-traceability').addEventListener('click', function() {
+    clearConsole(); setProgress(true); action('traceabilityMatrix');
+});
+document.getElementById('btn-dep-graph').addEventListener('click', function() {
+    clearConsole(); setProgress(true); action('dependencyGraph');
+});
+document.getElementById('btn-compile-hw').addEventListener('click', function() {
+    clearConsole(); setProgress(true); setStatus('hw-compile-status', 'Compiling...', 'busy'); action('compileHardware');
+});
+document.getElementById('btn-extract-hw').addEventListener('click', function() {
+    clearConsole(); setProgress(true); action('extractHardware');
+});
+
 window.addEventListener('message', function(event) {
     var msg = event.data;
     switch (msg.type) {
@@ -319,6 +345,10 @@ savedHmiConsole.forEach(function(l) {
     var el = document.getElementById('hmi-console');
     if (el) { var d = document.createElement('div'); d.className = 'console-line'; d.textContent = l; el.appendChild(d); }
 });
+savedAnalysisConsole.forEach(function(l) {
+    var el = document.getElementById('analysis-console');
+    if (el) { var d = document.createElement('div'); d.className = 'console-line'; d.textContent = l; el.appendChild(d); }
+});
 `;
 
 const HTML = `<!DOCTYPE html>
@@ -341,6 +371,7 @@ const HTML = `<!DOCTYPE html>
             <button class="tab-btn active" data-tab="plc">PLC</button>
             <button class="tab-btn" data-tab="hmi">HMI</button>
             <button class="tab-btn" data-tab="report">Reports</button>
+            <button class="tab-btn" data-tab="analysis">Analysis</button>
         </div>
         <div class="tab-content active" id="tab-plc">
             <div class="step-group">
@@ -420,6 +451,50 @@ const HTML = `<!DOCTYPE html>
                 <button class="btn" id="btn-export-bundle">Export</button>
             </div>
             <div class="report-content" id="report-content"></div>
+        </div>
+        <div class="tab-content" id="tab-analysis">
+            <div class="step-group">
+                <div class="step-header">Cross-reference Search</div>
+                <div class="step-row">
+                    <input type="text" class="input" id="xref-query" placeholder="Tag, block, or HMI element...">
+                    <select class="select" id="xref-type" style="flex:0;min-width:80px">
+                        <option value="auto">Auto</option>
+                        <option value="tag">Tag</option>
+                        <option value="block">Block</option>
+                        <option value="hmi">HMI</option>
+                    </select>
+                    <button class="btn btn-primary" id="btn-xref-search">Search</button>
+                </div>
+            </div>
+            <div class="step-group">
+                <div class="step-header">Dead Code Analysis</div>
+                <div class="step-row">
+                    <button class="btn" id="btn-dead-code">Run Analysis</button>
+                </div>
+            </div>
+            <div class="step-group">
+                <div class="step-header">HMI-PLC Traceability</div>
+                <div class="step-row">
+                    <button class="btn btn-primary" id="btn-traceability">Generate Matrix</button>
+                </div>
+            </div>
+            <div class="step-group">
+                <div class="step-header">Dependency Graph</div>
+                <div class="step-row">
+                    <button class="btn" id="btn-dep-graph">Generate Graph</button>
+                </div>
+            </div>
+            <div class="step-group">
+                <div class="step-header">Hardware Catalog</div>
+                <div class="step-row">
+                    <button class="btn" id="btn-compile-hw">Compile</button>
+                    <button class="btn btn-primary" id="btn-extract-hw">Extract Hardware</button>
+                    <span class="status-label" id="hw-compile-status"></span>
+                </div>
+                <div class="warning">Requires TIA Portal running with project open</div>
+            </div>
+            <div class="console-area" id="analysis-console"></div>
+            <div class="progress-bar" id="analysis-progress"></div>
         </div>
     </div>
     <script>${JS}</script>

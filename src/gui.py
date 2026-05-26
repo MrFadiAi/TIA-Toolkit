@@ -115,7 +115,7 @@ class TiaToolkitApp(ctk.CTk):
         ctk.CTkLabel(sb, text="TIA Toolkit", font=ctk.CTkFont(size=20, weight="bold")).pack(pady=(20, 30))
 
         self.nav_btns = {}
-        for key, label in [("plc", "PLC Pipeline"), ("hmi", "HMI Pipeline"), ("report", "Report Viewer")]:
+        for key, label in [("plc", "PLC Pipeline"), ("hmi", "HMI Pipeline"), ("report", "Report Viewer"), ("analysis", "Analysis")]:
             btn = ctk.CTkButton(sb, text=label, anchor="w", height=40,
                                 command=lambda k=key: self.show_page(k))
             btn.pack(fill="x", padx=15, pady=4)
@@ -138,7 +138,7 @@ class TiaToolkitApp(ctk.CTk):
         main.grid_columnconfigure(0, weight=1)
 
         self.pages = {}
-        for key in ("plc", "hmi", "report"):
+        for key in ("plc", "hmi", "report", "analysis"):
             page = ctk.CTkFrame(main, fg_color="transparent")
             page.grid(row=0, column=0, sticky="nsew")
             page.grid_remove()
@@ -147,6 +147,7 @@ class TiaToolkitApp(ctk.CTk):
         self._build_plc_page()
         self._build_hmi_page()
         self._build_report_page()
+        self._build_analysis_page()
 
     def show_page(self, key):
         for k, page in self.pages.items():
@@ -162,6 +163,9 @@ class TiaToolkitApp(ctk.CTk):
         elif key == "hmi":
             self._active_console = self.hmi_console
             self._active_progress = self.hmi_progress
+        elif key == "analysis":
+            self._active_console = self.analysis_console
+            self._active_progress = self.analysis_progress
         if key == "report":
             self._refresh_reports()
 
@@ -439,6 +443,137 @@ class TiaToolkitApp(ctk.CTk):
     def _gen_hmi_report(self):
         self.clear_console()
         self.run_command(["python", os.path.join(SCRIPT_DIR, "hmi_report.py")])
+
+    # ═══════════════════════════════════════════════════════════════════
+    # ANALYSIS PAGE
+    # ═══════════════════════════════════════════════════════════════════
+
+    def _build_analysis_page(self):
+        p = self.pages["analysis"]
+        p.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(p, text="Analysis Tools",
+                     font=ctk.CTkFont(size=22, weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 15))
+
+        # Cross-reference Search
+        f1 = ctk.CTkFrame(p)
+        f1.grid(row=1, column=0, sticky="ew", pady=5)
+        f1.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(f1, text="Cross-reference Search", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=4, sticky="w", padx=10, pady=(8, 4))
+        self.xref_query_var = ctk.StringVar()
+        ctk.CTkEntry(f1, textvariable=self.xref_query_var, placeholder_text="Enter tag, block, or HMI element name...").grid(row=1, column=0, columnspan=2, padx=10, pady=6, sticky="ew")
+        self.xref_type_var = ctk.StringVar(value="Auto")
+        ctk.CTkOptionMenu(f1, variable=self.xref_type_var, values=["Auto", "Tag", "Block", "HMI"], width=100).grid(row=1, column=2, padx=5, pady=6)
+        ctk.CTkButton(f1, text="Search", width=100, command=self._run_cross_reference).grid(row=1, column=3, padx=10, pady=6)
+
+        # Dead Code Analysis
+        f2 = ctk.CTkFrame(p)
+        f2.grid(row=2, column=0, sticky="ew", pady=5)
+        ctk.CTkLabel(f2, text="Unused Tags / Dead Code Detection", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(8, 4))
+        ctk.CTkButton(f2, text="Run Analysis", width=140, command=self._run_dead_code).grid(row=1, column=0, padx=10, pady=6)
+
+        # Traceability Matrix
+        f3 = ctk.CTkFrame(p)
+        f3.grid(row=3, column=0, sticky="ew", pady=5)
+        ctk.CTkLabel(f3, text="HMI-PLC Traceability Matrix", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 4))
+        ctk.CTkButton(f3, text="Generate Matrix", width=160, command=self._run_traceability).grid(row=1, column=0, padx=10, pady=6)
+
+        # Dependency Graph
+        f4 = ctk.CTkFrame(p)
+        f4.grid(row=4, column=0, sticky="ew", pady=5)
+        ctk.CTkLabel(f4, text="Block Dependency Graph", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(8, 4))
+        ctk.CTkButton(f4, text="Generate Graph", width=160, command=self._run_dependency_graph).grid(row=1, column=0, padx=10, pady=6)
+
+        # Hardware Catalog
+        f5 = ctk.CTkFrame(p)
+        f5.grid(row=5, column=0, sticky="ew", pady=5)
+        ctk.CTkLabel(f5, text="Hardware Catalog", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 4))
+        ctk.CTkButton(f5, text="Extract Hardware", width=160, command=self._run_hardware_extract).grid(row=1, column=0, padx=10, pady=6)
+        ctk.CTkButton(f5, text="Compile Extractor", width=150, command=self._compile_hardware).grid(row=1, column=1, padx=5, pady=6)
+        self.hw_compile_status = ctk.CTkLabel(f5, text="", font=ctk.CTkFont(size=12))
+        self.hw_compile_status.grid(row=1, column=2, sticky="w", padx=5, pady=6)
+        ctk.CTkLabel(f5, text="Requires TIA Portal running with project open", text_color="#F59E0B",
+                     font=ctk.CTkFont(size=12)).grid(row=2, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 6))
+
+        # Console
+        self._build_console(p, row=6, name="analysis")
+
+    # ── Analysis handlers ─────────────────────────────────────────────
+
+    def _run_cross_reference(self):
+        query = self.xref_query_var.get().strip()
+        if not query:
+            self.log("Enter a search query first.")
+            return
+        type_flag = self.xref_type_var.get().lower()
+        cmd = ["python", os.path.join(SCRIPT_DIR, "cross_reference.py"), query]
+        if type_flag != "auto":
+            cmd.append(f"--{type_flag}")
+        self.clear_console()
+        self.log(f"Searching: {query}")
+        self.run_command(cmd)
+
+    def _run_dead_code(self):
+        self.clear_console()
+        self.log("Running dead code analysis...")
+        self.run_command(["python", os.path.join(SCRIPT_DIR, "dead_code_analysis.py")])
+
+    def _run_traceability(self):
+        self.clear_console()
+        self.log("Generating traceability matrix...")
+        self.run_command(["python", os.path.join(SCRIPT_DIR, "traceability_matrix.py")])
+
+    def _run_dependency_graph(self):
+        self.clear_console()
+        self.log("Generating dependency graph...")
+        self.run_command(["python", os.path.join(SCRIPT_DIR, "dependency_graph.py")])
+
+    def _compile_hardware(self):
+        v = self.tia_version.get()
+        csc = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+        cs_file = os.path.join(SCRIPT_DIR, "tia_extract_hardware.cs")
+
+        if v == "V18-V19":
+            dll = r"C:\Program Files\Siemens\Automation\Portal V18\PublicAPI\V18\Siemens.Engineering.dll"
+            cmd = [csc, f"/reference:{dll}", f"/out:{os.path.join(SCRIPT_DIR, 'tia_extract_hardware.exe')}", cs_file]
+        else:
+            base = r"C:\Program Files\Siemens\Automation\Portal V21\PublicAPI\V21\net48"
+            cmd = [csc,
+                   f"/reference:{base}\\Siemens.Engineering.Base.dll",
+                   f"/reference:{base}\\Siemens.Engineering.Step7.dll",
+                   f"/out:{os.path.join(SCRIPT_DIR, 'tia_extract_hardware.exe')}", cs_file]
+
+        self.clear_console()
+        self.log("Compiling hardware extractor...")
+        self.hw_compile_status.configure(text="Compiling...", text_color="#F59E0B")
+
+        def on_done(rc, output):
+            if rc == 0:
+                self.hw_compile_status.configure(text="OK", text_color="#10B981")
+                self.log("Compile successful.")
+            else:
+                self.hw_compile_status.configure(text="FAILED", text_color="#EF4444")
+                self.log("Compile failed. Check Siemens DLL paths.")
+
+        self.run_command(cmd, on_complete=on_done)
+
+    def _run_hardware_extract(self):
+        hw_exe = os.path.join(SCRIPT_DIR, "tia_extract_hardware.exe")
+        if not os.path.exists(hw_exe):
+            self.log("Hardware extractor not found. Compile it first.")
+            return
+        out = os.path.join(DOC_OUTPUT, ".hardware.json")
+        self.clear_console()
+        self.log("Extracting hardware config...")
+        self.run_command([hw_exe, out],
+                         on_complete=lambda rc, _: self._on_hw_extract_done(rc))
+
+    def _on_hw_extract_done(self, rc):
+        if rc != 0:
+            self.log("Extraction failed.")
+            return
+        self.log("Generating hardware report...")
+        self.run_command(["python", os.path.join(SCRIPT_DIR, "hardware_report.py")])
 
     # ═══════════════════════════════════════════════════════════════════
     # REPORT PAGE

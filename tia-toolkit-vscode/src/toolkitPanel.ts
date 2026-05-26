@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import { getConfig, getExportExe, getExtractExe, getCompileCommand, ToolkitConfig } from './config';
+import { getConfig, getExportExe, getExtractExe, getCompileCommand, getHardwareExe, getHardwareCompileCommand, ToolkitConfig } from './config';
 import { CommandRunner } from './commandRunner';
 import { parseDeviceList, scanReports } from './parseOutput';
 import { syncToWorkspace } from './outputSync';
@@ -126,6 +126,24 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
                 break;
             case 'exportBundle':
                 await this.doExportBundle();
+                break;
+            case 'crossReference':
+                await this.runCrossReference(msg.query, msg.queryType);
+                break;
+            case 'deadCode':
+                await this.runSingle(['dead_code_analysis.py']);
+                break;
+            case 'traceabilityMatrix':
+                await this.runSingle(['traceability_matrix.py']);
+                break;
+            case 'dependencyGraph':
+                await this.runSingle(['dependency_graph.py']);
+                break;
+            case 'compileHardware':
+                await this.compileHardware();
+                break;
+            case 'extractHardware':
+                await this.extractHardware();
                 break;
         }
     }
@@ -357,6 +375,52 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
         } else {
             this.consoleLog('Nothing to export. Run extractions first.');
         }
+    }
+
+    // ── Analysis handlers ─────────────────────────────────────────────
+
+    private async runCrossReference(query: string, queryType: string): Promise<void> {
+        const cmd = [this.config.pythonPath, path.join(this.config.srcDir, 'cross_reference.py'), query];
+        if (queryType && queryType !== 'auto') {
+            cmd.push(`--${queryType}`);
+        }
+        const result = await this.runner.runSingle(
+            cmd, this.config.srcDir,
+            (text) => this.consoleLog(text)
+        );
+        this.setProgress(false);
+        if (result.rc === 0) { this.consoleLog('Done.'); }
+        else { this.consoleLog(`Search failed (exit code ${result.rc}).`); }
+        await this.maybeSync();
+    }
+
+    private async compileHardware(): Promise<void> {
+        const cmd = getHardwareCompileCommand(this.config.srcDir, this.tiaVersion);
+        const result = await this.runner.runSingle(
+            cmd, this.config.srcDir,
+            (text) => this.consoleLog(text)
+        );
+        this.setProgress(false);
+        if (result.rc === 0) {
+            this.postMessage({ type: 'compileStatus', id: 'hw-compile-status', text: 'OK', cls: 'ok' });
+            this.consoleLog('Compile successful.');
+        } else {
+            this.postMessage({ type: 'compileStatus', id: 'hw-compile-status', text: 'FAILED', cls: 'fail' });
+            this.consoleLog('Compile failed.');
+        }
+    }
+
+    private async extractHardware(): Promise<void> {
+        const hwExe = getHardwareExe(this.config.srcDir);
+        const jsonPath = path.join(this.config.docOutput, '.hardware.json');
+
+        await this.runner.runChain([
+            { cmd: [hwExe, jsonPath], label: 'Extract hardware' },
+            { cmd: [this.config.pythonPath, path.join(this.config.srcDir, 'hardware_report.py')], label: 'Generate report' },
+        ], this.config.srcDir, (text) => this.consoleLog(text));
+
+        this.setProgress(false);
+        await this.maybeSync();
     }
 
     public dispose(): void {
