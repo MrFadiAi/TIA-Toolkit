@@ -213,6 +213,13 @@ function populateDevices(plc, hmi) {
         });
     }
     saveState();
+    // Sync pipeline dropdowns
+    var pPlc = document.getElementById('pipeline-plc');
+    pPlc.innerHTML = '<option value="">-- PLC --</option>';
+    plc.forEach(function(d) { var o = document.createElement('option'); o.value = d.device; o.textContent = d.name; pPlc.appendChild(o); });
+    var pHmi = document.getElementById('pipeline-hmi');
+    pHmi.innerHTML = '<option value="">-- HMI --</option>';
+    hmi.forEach(function(d) { var o = document.createElement('option'); o.value = d.device; o.textContent = d.name; pHmi.appendChild(o); });
 }
 
 document.getElementById('btn-list-devices').addEventListener('click', function() {
@@ -275,6 +282,13 @@ document.getElementById('btn-export-bundle').addEventListener('click', function(
 });
 
 // ── Analysis tab buttons ─────────────────────────────────────────────────
+document.getElementById('btn-run-pipeline').addEventListener('click', function() {
+    var plc = document.getElementById('pipeline-plc').value;
+    var hmi = document.getElementById('pipeline-hmi').value;
+    if (!plc && !hmi) { appendConsole('Select at least a PLC or HMI device.'); return; }
+    clearConsole(); setProgress(true);
+    action('runFullPipeline', { plcDevice: plc, hmiDevice: hmi });
+});
 document.getElementById('btn-xref-search').addEventListener('click', function() {
     var q = document.getElementById('xref-query').value;
     var t = document.getElementById('xref-type').value;
@@ -453,6 +467,15 @@ const HTML = `<!DOCTYPE html>
             <div class="report-content" id="report-content"></div>
         </div>
         <div class="tab-content" id="tab-analysis">
+            <div class="step-group" style="border-color:var(--accent)">
+                <div class="step-header" style="color:var(--accent)">Full Pipeline</div>
+                <div class="step-row">
+                    <select class="select" id="pipeline-plc" style="flex:1;min-width:120px"><option value="">-- PLC --</option></select>
+                    <select class="select" id="pipeline-hmi" style="flex:1;min-width:120px"><option value="">-- HMI --</option></select>
+                    <button class="btn btn-primary" id="btn-run-pipeline" style="white-space:nowrap">Run Full Pipeline</button>
+                </div>
+                <div class="warning">Exports PLC + HMI, runs all analyses, generates CLAUDE.md. Requires TIA Portal open.</div>
+            </div>
             <div class="step-group">
                 <div class="step-header">Cross-reference Search</div>
                 <div class="step-row">

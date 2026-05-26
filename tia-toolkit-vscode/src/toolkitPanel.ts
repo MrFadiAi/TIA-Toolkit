@@ -145,6 +145,9 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
             case 'extractHardware':
                 await this.extractHardware();
                 break;
+            case 'runFullPipeline':
+                await this.runFullPipeline(msg.plcDevice, msg.hmiDevice);
+                break;
         }
     }
 
@@ -420,6 +423,69 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
         ], this.config.srcDir, (text) => this.consoleLog(text));
 
         this.setProgress(false);
+        await this.maybeSync();
+    }
+
+    // ── Full Pipeline ──────────────────────────────────────────────────
+
+    private async runFullPipeline(plcDevice: string, hmiDevice: string): Promise<void> {
+        const steps: { label: string; fn: () => Promise<void> }[] = [];
+
+        // 1. Export PLC blocks
+        if (plcDevice) {
+            steps.push({ label: 'Export PLC blocks', fn: async () => {
+                await this.exportBlocks(plcDevice, '');
+            }});
+        }
+
+        // 2. Extract HMI data
+        if (hmiDevice) {
+            steps.push({ label: 'Extract HMI data', fn: async () => {
+                await this.extractHmi(hmiDevice);
+            }});
+        }
+
+        // 3-7. Analysis scripts
+        const analysisScripts = [
+            { label: 'Dead code analysis', script: 'dead_code_analysis.py' },
+            { label: 'Traceability matrix', script: 'traceability_matrix.py' },
+            { label: 'Dependency graph', script: 'dependency_graph.py' },
+        ];
+
+        for (const a of analysisScripts) {
+            steps.push({ label: a.label, fn: async () => {
+                const cmd = [this.config.pythonPath, path.join(this.config.srcDir, a.script)];
+                const result = await this.runner.runSingle(cmd, this.config.srcDir, (t) => this.consoleLog(t));
+                if (result.rc !== 0) { this.consoleLog(`${a.label} failed (exit ${result.rc}).`); }
+                await this.maybeSync();
+            }});
+        }
+
+        // Hardware extraction
+        steps.push({ label: 'Hardware extraction', fn: async () => {
+            await this.extractHardware();
+        }});
+
+        // Generate CLAUDE.md
+        steps.push({ label: 'Generate CLAUDE.md', fn: async () => {
+            await this.runSingle(['generate_claudemd.py'], async () => {
+                this.refreshReports();
+            });
+        }});
+
+        // Run all steps sequentially
+        const total = steps.length;
+        for (let i = 0; i < steps.length; i++) {
+            this.consoleLog(`\n[${ i + 1}/${total}] ${steps[i].label}...`);
+            try {
+                await steps[i].fn();
+            } catch (err: any) {
+                this.consoleLog(`Error in ${steps[i].label}: ${err.message}`);
+            }
+        }
+
+        this.setProgress(false);
+        this.consoleLog(`\nPipeline complete (${total} steps).`);
         await this.maybeSync();
     }
 

@@ -251,6 +251,15 @@ class TiaToolkitApp(ctk.CTk):
         if hmi_labels:
             self.hmi_device_var.set(hmi_labels[0])
         self.log(f"Found {len(self.plc_devices)} PLC(s), {len(self.hmi_devices)} HMI(s)")
+        # Sync pipeline dropdowns
+        p_plc = [d['name'] for d in self.plc_devices]
+        p_hmi = [d['name'] for d in self.hmi_devices]
+        self.pipeline_plc_dd.configure(values=p_plc or ["-- no PLC --"])
+        self.pipeline_hmi_dd.configure(values=p_hmi or ["-- no HMI --"])
+        if p_plc:
+            self.pipeline_plc_var.set(p_plc[0])
+        if p_hmi:
+            self.pipeline_hmi_var.set(p_hmi[0])
 
     def _compile_exporter(self):
         v = self.tia_version.get()
@@ -455,9 +464,29 @@ class TiaToolkitApp(ctk.CTk):
         ctk.CTkLabel(p, text="Analysis Tools",
                      font=ctk.CTkFont(size=22, weight="bold")).grid(row=0, column=0, sticky="w", pady=(0, 15))
 
+        # Full Pipeline
+        fp = ctk.CTkFrame(p, border_width=2, border_color=("#3B82F6", "#3B82F6"))
+        fp.grid(row=1, column=0, sticky="ew", pady=5)
+        fp.grid_columnconfigure(1, weight=1)
+        fp.grid_columnconfigure(2, weight=1)
+        ctk.CTkLabel(fp, text="Full Pipeline", font=ctk.CTkFont(weight="bold", size=14),
+                     text_color=("#3B82F6", "#3B82F6")).grid(row=0, column=0, columnspan=4, sticky="w", padx=10, pady=(8, 4))
+        self.pipeline_plc_var = ctk.StringVar(value="-- select PLC --")
+        self.pipeline_plc_dd = ctk.CTkOptionMenu(fp, variable=self.pipeline_plc_var, values=["-- select PLC --"],
+                          width=200)
+        self.pipeline_plc_dd.grid(row=1, column=1, padx=5, pady=6, sticky="ew")
+        self.pipeline_hmi_var = ctk.StringVar(value="-- select HMI --")
+        self.pipeline_hmi_dd = ctk.CTkOptionMenu(fp, variable=self.pipeline_hmi_var, values=["-- select HMI --"],
+                          width=200)
+        self.pipeline_hmi_dd.grid(row=1, column=2, padx=5, pady=6, sticky="ew")
+        ctk.CTkButton(fp, text="Run Full Pipeline", width=160, fg_color=("#3B82F6", "#3B82F6"),
+                      command=self._run_full_pipeline).grid(row=1, column=3, padx=10, pady=6)
+        ctk.CTkLabel(fp, text="Exports PLC + HMI, runs all analyses, generates CLAUDE.md. Requires TIA Portal open.",
+                     text_color="#F59E0B", font=ctk.CTkFont(size=12)).grid(row=2, column=0, columnspan=4, sticky="w", padx=10, pady=(0, 6))
+
         # Cross-reference Search
         f1 = ctk.CTkFrame(p)
-        f1.grid(row=1, column=0, sticky="ew", pady=5)
+        f1.grid(row=2, column=0, sticky="ew", pady=5)
         f1.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(f1, text="Cross-reference Search", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=4, sticky="w", padx=10, pady=(8, 4))
         self.xref_query_var = ctk.StringVar()
@@ -468,25 +497,25 @@ class TiaToolkitApp(ctk.CTk):
 
         # Dead Code Analysis
         f2 = ctk.CTkFrame(p)
-        f2.grid(row=2, column=0, sticky="ew", pady=5)
+        f2.grid(row=3, column=0, sticky="ew", pady=5)
         ctk.CTkLabel(f2, text="Unused Tags / Dead Code Detection", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(8, 4))
         ctk.CTkButton(f2, text="Run Analysis", width=140, command=self._run_dead_code).grid(row=1, column=0, padx=10, pady=6)
 
         # Traceability Matrix
         f3 = ctk.CTkFrame(p)
-        f3.grid(row=3, column=0, sticky="ew", pady=5)
+        f3.grid(row=4, column=0, sticky="ew", pady=5)
         ctk.CTkLabel(f3, text="HMI-PLC Traceability Matrix", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 4))
         ctk.CTkButton(f3, text="Generate Matrix", width=160, command=self._run_traceability).grid(row=1, column=0, padx=10, pady=6)
 
         # Dependency Graph
         f4 = ctk.CTkFrame(p)
-        f4.grid(row=4, column=0, sticky="ew", pady=5)
+        f4.grid(row=5, column=0, sticky="ew", pady=5)
         ctk.CTkLabel(f4, text="Block Dependency Graph", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=2, sticky="w", padx=10, pady=(8, 4))
         ctk.CTkButton(f4, text="Generate Graph", width=160, command=self._run_dependency_graph).grid(row=1, column=0, padx=10, pady=6)
 
         # Hardware Catalog
         f5 = ctk.CTkFrame(p)
-        f5.grid(row=5, column=0, sticky="ew", pady=5)
+        f5.grid(row=6, column=0, sticky="ew", pady=5)
         ctk.CTkLabel(f5, text="Hardware Catalog", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 4))
         ctk.CTkButton(f5, text="Extract Hardware", width=160, command=self._run_hardware_extract).grid(row=1, column=0, padx=10, pady=6)
         ctk.CTkButton(f5, text="Compile Extractor", width=150, command=self._compile_hardware).grid(row=1, column=1, padx=5, pady=6)
@@ -496,7 +525,7 @@ class TiaToolkitApp(ctk.CTk):
                      font=ctk.CTkFont(size=12)).grid(row=2, column=0, columnspan=3, sticky="w", padx=10, pady=(0, 6))
 
         # Console
-        self._build_console(p, row=6, name="analysis")
+        self._build_console(p, row=7, name="analysis")
 
     # ── Analysis handlers ─────────────────────────────────────────────
 
@@ -574,6 +603,85 @@ class TiaToolkitApp(ctk.CTk):
             return
         self.log("Generating hardware report...")
         self.run_command(["python", os.path.join(SCRIPT_DIR, "hardware_report.py")])
+
+    def _pipeline_device_by_name(self, name):
+        """Find device dict by display name from pipeline dropdown."""
+        for d in self.plc_devices:
+            if d['name'] == name:
+                return d['device']
+        for d in self.hmi_devices:
+            if d['name'] == name:
+                return d['device']
+        return None
+
+    def _run_full_pipeline(self):
+        plc_name = self.pipeline_plc_var.get()
+        hmi_name = self.pipeline_hmi_var.get()
+        if plc_name.startswith("--") and hmi_name.startswith("--"):
+            self.log("Select at least a PLC or HMI device first.")
+            return
+        self.clear_console()
+
+        # Build step queue
+        self._pipeline_steps = []
+        plc_device = self._pipeline_device_by_name(plc_name) if not plc_name.startswith("--") else None
+        hmi_device = self._pipeline_device_by_name(hmi_name) if not hmi_name.startswith("--") else None
+
+        if plc_device:
+            v = self.tia_version.get()
+            exe = os.path.join(SCRIPT_DIR, "tia_export_blocks_v18.exe" if v == "V18-V19" else "tia_export_blocks.exe")
+            out = os.path.join(DOC_OUTPUT, "DATA_Program blocks")
+            self._pipeline_steps.append(("Export PLC blocks", [exe, out, plc_device]))
+            self._pipeline_steps.append(("Parse PLC blocks", ["python", os.path.join(SCRIPT_DIR, "extract_plc_full.py"), out, "--verbose", "--plc-name", plc_device]))
+            self._pipeline_steps.append(("Generate PLC reports", ["python", os.path.join(SCRIPT_DIR, "plc_report.py")]))
+
+        if hmi_device:
+            v = self.tia_version.get()
+            exe = os.path.join(SCRIPT_DIR, "tia_extract_v18.exe" if v == "V18-V19" else "tia_extract.exe")
+            json_path = os.path.join(DOC_OUTPUT, ".hmi_online_data.json")
+            self._pipeline_steps.append(("Extract HMI data", [exe, json_path, hmi_device]))
+            self._pipeline_steps.append(("Generate HMI reports", ["python", os.path.join(SCRIPT_DIR, "hmi_report.py")]))
+
+        self._pipeline_steps.append(("Dead code analysis", ["python", os.path.join(SCRIPT_DIR, "dead_code_analysis.py")]))
+        self._pipeline_steps.append(("Traceability matrix", ["python", os.path.join(SCRIPT_DIR, "traceability_matrix.py")]))
+        self._pipeline_steps.append(("Dependency graph", ["python", os.path.join(SCRIPT_DIR, "dependency_graph.py")]))
+
+        hw_exe = os.path.join(SCRIPT_DIR, "tia_extract_hardware.exe")
+        if os.path.exists(hw_exe):
+            self._pipeline_steps.append(("Extract hardware", [hw_exe, os.path.join(DOC_OUTPUT, ".hardware.json")]))
+
+        self._pipeline_steps.append(("Generate CLAUDE.md", ["python", os.path.join(SCRIPT_DIR, "generate_claudemd.py")]))
+
+        self._pipeline_idx = 0
+        self._pipeline_total = len(self._pipeline_steps)
+        self._run_next_pipeline_step()
+
+    def _run_next_pipeline_step(self):
+        if self._pipeline_idx >= len(self._pipeline_steps):
+            self.log(f"\nPipeline complete ({self._pipeline_total} steps).")
+            return
+        label, cmd = self._pipeline_steps[self._pipeline_idx]
+        self.log(f"\n[{self._pipeline_idx + 1}/{self._pipeline_total}] {label}...")
+
+        # For hardware step, add report generation after
+        next_idx = self._pipeline_idx + 1
+        if "hardware" in label.lower():
+            self.run_command(cmd, on_complete=lambda rc, _: self._on_hw_extract_then_continue(rc))
+        else:
+            self.run_command(cmd, on_complete=lambda rc, _: self._advance_pipeline(rc))
+
+    def _on_hw_extract_then_continue(self, rc):
+        if rc == 0:
+            self.run_command(["python", os.path.join(SCRIPT_DIR, "hardware_report.py")],
+                             on_complete=lambda rc2, _: self._advance_pipeline(rc2))
+        else:
+            self._advance_pipeline(rc)
+
+    def _advance_pipeline(self, rc):
+        if rc != 0:
+            self.log(f"Step failed (exit {rc}), continuing...")
+        self._pipeline_idx += 1
+        self._run_next_pipeline_step()
 
     # ═══════════════════════════════════════════════════════════════════
     # REPORT PAGE
