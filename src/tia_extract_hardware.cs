@@ -177,44 +177,45 @@ class Program
                     {
                         foreach (var node in nodes)
                         {
-                            // IP address — try multiple property names
-                            try
+                            // Dump all node properties for first few modules
+                            if (moduleCount < 8)
                             {
-                                var ipProp = node.GetType().GetProperty("IpV4Address");
-                                if (ipProp == null) ipProp = node.GetType().GetProperty("IpAddress");
-                                if (ipProp == null) ipProp = node.GetType().GetProperty("IPAddress");
-                                if (ipProp != null)
+                                Console.WriteLine("    [NetworkInterface Node for: {0}]", itemName);
+                                foreach (var p in node.GetType().GetProperties())
                                 {
-                                    var ipVal = ipProp.GetValue(node);
-                                    if (ipVal != null) ipAddress = ipVal.ToString();
+                                    try
+                                    {
+                                        var pv = p.GetValue(node);
+                                        string pvs = (pv != null) ? pv.ToString() : "(null)";
+                                        if (pvs.Length > 80) pvs = pvs.Substring(0, 80) + "...";
+                                        Console.WriteLine("      {0} ({1}): {2}", p.Name, p.PropertyType.Name, pvs);
+                                    }
+                                    catch (Exception ex)
+                                    {
+                                        Console.WriteLine("      {0}: ERROR: {1}", p.Name, ex.Message);
+                                    }
                                 }
                             }
-                            catch { }
 
-                            // Subnet mask
-                            try
-                            {
-                                var smProp = node.GetType().GetProperty("IpV4SubnetMask");
-                                if (smProp == null) smProp = node.GetType().GetProperty("SubnetMask");
-                                if (smProp != null)
-                                {
-                                    var smVal = smProp.GetValue(node);
-                                    if (smVal != null) subnet = smVal.ToString();
-                                }
-                            }
-                            catch { }
+                            // Try ALL possible property names for IP and subnet
+                            ipAddress = TryGet(node, new[] { "IpV4Address", "IpAddress", "IPAddress", "Address" });
+                            subnet = TryGet(node, new[] { "IpV4SubnetMask", "SubnetMask", "Subnet" });
+                            profinetName = TryGet(node, new[] { "Name", "DeviceName", "ProfinetName" });
 
-                            // PROFINET name
-                            try
+                            // Also try GetAttribute on the node
+                            if (string.IsNullOrEmpty(ipAddress))
                             {
-                                var nameProp = node.GetType().GetProperty("Name");
-                                if (nameProp != null)
+                                try
                                 {
-                                    var nameVal = nameProp.GetValue(node);
-                                    if (nameVal != null) profinetName = nameVal.ToString();
+                                    var ga = node.GetType().GetMethod("GetAttribute");
+                                    if (ga != null)
+                                    {
+                                        var result = ga.Invoke(node, new object[] { "IpV4Address" });
+                                        if (result != null) ipAddress = result.ToString();
+                                    }
                                 }
+                                catch { }
                             }
-                            catch { }
 
                             break;
                         }
@@ -224,9 +225,9 @@ class Program
         }
         catch { }
 
-        // Only add modules that have useful info (skip system-internal items)
+        // Include items with useful info OR PROFINET/network interfaces
         bool hasInfo = !string.IsNullOrEmpty(orderNum) || !string.IsNullOrEmpty(ipAddress)
-                     || !string.IsNullOrEmpty(firmware)
+                     || !string.IsNullOrEmpty(firmware) || !string.IsNullOrEmpty(profinetName)
                      || (!string.IsNullOrEmpty(typeId) && !typeId.StartsWith("System:"));
 
         if (hasInfo || depth == 0)
@@ -301,6 +302,24 @@ class Program
             catch { }
         }
         return null;
+    }
+
+    static string TryGet(object o, string[] names)
+    {
+        foreach (var n in names)
+        {
+            try
+            {
+                var p = o.GetType().GetProperty(n);
+                if (p != null)
+                {
+                    var v = p.GetValue(o);
+                    if (v != null) return v.ToString();
+                }
+            }
+            catch { }
+        }
+        return "";
     }
 
     static string J(string s)
