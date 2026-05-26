@@ -1,17 +1,15 @@
 using System;
 using System.Linq;
 using System.Collections;
-using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using Siemens.Engineering;
 using Siemens.Engineering.HW;
-using Siemens.Engineering.HW.Features;
-using Siemens.Engineering.SW;
 
 /// <summary>
 /// TIA Portal Hardware Catalog Extractor
-/// Extracts hardware configuration (modules, IPs, PROFINET names, order numbers, firmware).
+/// Extracts hardware configuration (modules, order numbers, firmware, IPs, PROFINET names).
+/// Uses pure reflection for all property access — no compile-time dependency on HW.Features.
 ///
 /// Compile for TIA Portal V18-V19:
 ///   csc.exe /reference:"...\Siemens.Engineering.dll" /out:tia_extract_hardware.exe tia_extract_hardware.cs
@@ -133,33 +131,45 @@ class Program
         string profinetName = "";
         int slot = -1;
 
-        // Type identifier / order number via reflection
+        // Type identifier
         try { typeId = item.TypeIdentifier ?? ""; } catch { }
+
+        // All properties via reflection — no HW.Features dependency
         try { orderNum = FastGet(item, "OrderNumber") ?? ""; } catch { }
-
-        // Firmware via reflection (DeviceFirmware type not available at compile time)
         try { firmware = FastGet(item, "FirmwareVersion") ?? ""; } catch { }
+        try { ipAddress = FastGet(item, "IpAddress") ?? ""; } catch { }
+        try { subnet = FastGet(item, "SubnetMask") ?? ""; } catch { }
+        try { profinetName = FastGet(item, "ProfinetName") ?? ""; } catch { }
 
-        // Network interface (IP, subnet, PROFINET name) — all via reflection
-        try
+        // Network interface via runtime reflection (avoids compile-time type reference)
+        if (string.IsNullOrEmpty(ipAddress))
         {
-            var ni = item.GetService<NetworkInterface>();
-            if (ni != null)
+            try
             {
-                foreach (var node in ni.Nodes)
+                var niObj = ReflectGetService(item, "Siemens.Engineering.HW.Features.NetworkInterface");
+                if (niObj != null)
                 {
-                    // Try multiple possible property names for cross-version compat
-                    try { ipAddress = FastGet(node, "IpV4Address") ?? FastGet(node, "IpAddress") ?? ""; } catch { }
-                    try { subnet = FastGet(node, "IpV4SubnetMask") ?? FastGet(node, "SubnetMask") ?? ""; } catch { }
-                    try { profinetName = FastGet(node, "Name") ?? ""; } catch { }
-                    break;
+                    var nodesProp = niObj.GetType().GetProperty("Nodes");
+                    if (nodesProp != null)
+                    {
+                        var nodes = nodesProp.GetValue(niObj) as IEnumerable;
+                        if (nodes != null)
+                        {
+                            foreach (var node in nodes)
+                            {
+                                try { ipAddress = FastGet(node, "IpV4Address") ?? FastGet(node, "IpAddress") ?? ipAddress; } catch { }
+                                try { subnet = FastGet(node, "IpV4SubnetMask") ?? FastGet(node, "SubnetMask") ?? subnet; } catch { }
+                                if (string.IsNullOrEmpty(profinetName))
+                                {
+                                    try { profinetName = FastGet(node, "Name") ?? profinetName; } catch { }
+                                }
+                                break;
+                            }
+                        }
+                    }
                 }
             }
-        }
-        catch { }
-        if (string.IsNullOrEmpty(profinetName))
-        {
-            try { profinetName = FastGet(item, "ProfinetName") ?? ""; } catch { }
+            catch { }
         }
 
         // Position (rack/slot)
@@ -223,6 +233,28 @@ class Program
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Call GetService&lt;T&gt;() via reflection — avoids compile-time type reference
+    /// that would trigger loading Siemens.Engineering V18 at JIT time.
+    /// </summary>
+    static object ReflectGetService(DeviceItem item, string typeName)
+    {
+        foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            var t = asm.GetType(typeName);
+            if (t != null)
+            {
+                var method = item.GetType().GetMethod("GetService");
+                if (method != null)
+                {
+                    var generic = method.MakeGenericMethod(t);
+                    return generic.Invoke(item, null);
+                }
+            }
+        }
+        return null;
+    }
 
     static string J(string s)
     {
