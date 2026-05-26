@@ -7,21 +7,8 @@ using Siemens.Engineering;
 using Siemens.Engineering.HW;
 
 /// <summary>
-/// TIA Portal Hardware Catalog Extractor
-/// Extracts hardware configuration (modules, order numbers, firmware, IPs, PROFINET names).
-/// Uses pure reflection for all property access — no compile-time dependency on HW.Features.
-///
-/// Compile for TIA Portal V18-V19:
-///   csc.exe /reference:"...\Siemens.Engineering.dll" /out:tia_extract_hardware.exe tia_extract_hardware.cs
-///
-/// Compile for TIA Portal V21+:
-///   csc.exe /reference:"...\Siemens.Engineering.Base.dll" /reference:"...\Siemens.Engineering.Step7.dll"
-///     /out:tia_extract_hardware.exe tia_extract_hardware.cs
-///
-/// Run (TIA Portal must be open with project loaded):
-///   tia_extract_hardware.exe [output_json] [device_filter]
-///     output_json   - output JSON file (default: Doc_OUTPUT/.hardware.json)
-///     device_filter - substring of device name to filter (optional)
+/// TIA Portal Hardware Catalog Extractor (Diagnostic)
+/// Dumps ALL DeviceItem properties/attributes to discover correct API names.
 /// </summary>
 class Program
 {
@@ -84,6 +71,14 @@ class Program
 
             json.AppendLine("    {");
             json.AppendLine("      \"device_name\": " + J(device.Name) + ",");
+
+            // Dump device properties for first device only
+            if (deviceCount == 0)
+            {
+                Console.WriteLine("  [DEBUG Device properties]");
+                DumpProperties(device, "  ");
+            }
+
             json.AppendLine("      \"modules\": [");
 
             bool firstModule = true;
@@ -129,19 +124,34 @@ class Program
         string ipAddress = "";
         string subnet = "";
         string profinetName = "";
+        string comment = "";
         int slot = -1;
 
         // Type identifier
         try { typeId = item.TypeIdentifier ?? ""; } catch { }
 
-        // All properties via reflection — no HW.Features dependency
-        try { orderNum = FastGet(item, "OrderNumber") ?? ""; } catch { }
-        try { firmware = FastGet(item, "FirmwareVersion") ?? ""; } catch { }
-        try { ipAddress = FastGet(item, "IpAddress") ?? ""; } catch { }
-        try { subnet = FastGet(item, "SubnetMask") ?? ""; } catch { }
-        try { profinetName = FastGet(item, "ProfinetName") ?? ""; } catch { }
+        // Try all possible attribute/property names
+        string[] orderProps = { "OrderNumber", "ArticleNumber", "CatalogNumber", "HardwareIdentifier" };
+        string[] fwProps = { "FirmwareVersion", "Firmware", "Version", "ModuleVersion" };
+        string[] ipProps = { "IpAddress", "IpV4Address", "IPAddress" };
+        string[] subnetProps = { "SubnetMask", "IpV4SubnetMask" };
+        string[] pnProps = { "ProfinetName", "DeviceName", "ProfiNetName" };
+        string[] commentProps = { "Comment" };
 
-        // Network interface via runtime reflection (avoids compile-time type reference)
+        orderNum = TryGetAny(item, orderProps);
+        firmware = TryGetAny(item, fwProps);
+        ipAddress = TryGetAny(item, ipProps);
+        subnet = TryGetAny(item, subnetProps);
+        profinetName = TryGetAny(item, pnProps);
+        comment = TryGetAny(item, commentProps);
+
+        // Try GetAttribute approach
+        if (string.IsNullOrEmpty(orderNum))
+        {
+            try { var v = item.GetAttribute("OrderNumber"); if (v != null) orderNum = v.ToString(); } catch { }
+        }
+
+        // Try NetworkInterface service via runtime reflection for IP
         if (string.IsNullOrEmpty(ipAddress))
         {
             try
@@ -157,12 +167,10 @@ class Program
                         {
                             foreach (var node in nodes)
                             {
-                                try { ipAddress = FastGet(node, "IpV4Address") ?? FastGet(node, "IpAddress") ?? ipAddress; } catch { }
-                                try { subnet = FastGet(node, "IpV4SubnetMask") ?? FastGet(node, "SubnetMask") ?? subnet; } catch { }
+                                ipAddress = TryGetAny(node, new[] { "IpV4Address", "IpAddress", "IPAddress" });
+                                subnet = TryGetAny(node, new[] { "IpV4SubnetMask", "SubnetMask" });
                                 if (string.IsNullOrEmpty(profinetName))
-                                {
-                                    try { profinetName = FastGet(node, "Name") ?? profinetName; } catch { }
-                                }
+                                    profinetName = TryGetAny(node, new[] { "Name" });
                                 break;
                             }
                         }
@@ -179,6 +187,19 @@ class Program
             if (pos != null) slot = Convert.ToInt32(pos);
         }
         catch { }
+
+        // Debug dump for first module of first few devices
+        if (moduleCount < 5)
+        {
+            Console.WriteLine("  [DEBUG DeviceItem: {0}]", itemName);
+            Console.WriteLine("    TypeIdentifier: {0}", typeId);
+            DumpProperties(item, "    ");
+            Console.WriteLine("    [Attributes]");
+            DumpAttributes(item, "    ");
+            Console.WriteLine("    [Services]");
+            DumpServices(item, "    ");
+            Console.WriteLine();
+        }
 
         // Only add modules that have useful info
         bool hasInfo = !string.IsNullOrEmpty(orderNum) || !string.IsNullOrEmpty(ipAddress)
@@ -204,10 +225,12 @@ class Program
                 json.AppendLine(indent + "  \"subnet_mask\": " + J(subnet) + ",");
             if (!string.IsNullOrEmpty(profinetName))
                 json.AppendLine(indent + "  \"profinet_name\": " + J(profinetName) + ",");
+            if (!string.IsNullOrEmpty(comment))
+                json.AppendLine(indent + "  \"comment\": " + J(comment) + ",");
             if (slot >= 0)
                 json.AppendLine(indent + "  \"slot\": " + slot + ",");
 
-            // Remove trailing comma from last field
+            // Remove trailing comma
             string lastLine = json.ToString().TrimEnd();
             if (lastLine.EndsWith(","))
             {
@@ -232,28 +255,113 @@ class Program
         }
     }
 
+    // ── Diagnostic helpers ──────────────────────────────────────────────
+
+    static void DumpProperties(object o, string prefix)
+    {
+        try
+        {
+            foreach (var p in o.GetType().GetProperties())
+            {
+                try
+                {
+                    var val = p.GetValue(o);
+                    string valStr = (val != null) ? val.ToString() : "(null)";
+                    if (valStr.Length > 120) valStr = valStr.Substring(0, 120) + "...";
+                    Console.WriteLine("{0}{1} ({2}): {3}", prefix, p.Name, p.PropertyType.Name, valStr);
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine("{0}{1} ({2}): ERROR: {3}", prefix, p.Name, p.PropertyType.Name, ex.Message);
+                }
+            }
+        }
+        catch { }
+    }
+
+    static void DumpAttributes(DeviceItem item, string prefix)
+    {
+        try
+        {
+            // Try common attribute names
+            string[] attrs = { "OrderNumber", "FirmwareVersion", "Firmware", "Version",
+                "IpAddress", "SubnetMask", "PositionInParent", "Comment",
+                "ArticleNumber", "CatalogNumber", "DeviceName", "ProfinetName" };
+            foreach (var attr in attrs)
+            {
+                try
+                {
+                    var val = item.GetAttribute(attr);
+                    if (val != null)
+                        Console.WriteLine("{0}{1} = {2}", prefix, attr, val);
+                }
+                catch { }
+            }
+        }
+        catch { }
+    }
+
+    static void DumpServices(DeviceItem item, string prefix)
+    {
+        try
+        {
+            // List what GetService overloads return for known service types
+            string[] serviceNames = {
+                "Siemens.Engineering.HW.Features.NetworkInterface",
+                "Siemens.Engineering.HW.Features.DeviceFirmware",
+                "Siemens.Engineering.SW.SoftwareContainer",
+            };
+            foreach (var sn in serviceNames)
+            {
+                try
+                {
+                    var svc = ReflectGetService(item, sn);
+                    string shortName = sn.Substring(sn.LastIndexOf('.') + 1);
+                    Console.WriteLine("{0}{1}: {2}", prefix, shortName,
+                        svc != null ? "found" : "null");
+                }
+                catch (Exception ex)
+                {
+                    string shortName = sn.Substring(sn.LastIndexOf('.') + 1);
+                    Console.WriteLine("{0}{1}: ERROR: {2}", prefix, shortName, ex.Message);
+                }
+            }
+        }
+        catch { }
+    }
+
     // ── Helpers ──────────────────────────────────────────────────────────
 
-    /// <summary>
-    /// Call GetService&lt;T&gt;() via reflection — avoids compile-time type reference
-    /// that would trigger loading Siemens.Engineering V18 at JIT time.
-    /// </summary>
     static object ReflectGetService(DeviceItem item, string typeName)
     {
         foreach (var asm in AppDomain.CurrentDomain.GetAssemblies())
         {
-            var t = asm.GetType(typeName);
-            if (t != null)
+            try
             {
-                var method = item.GetType().GetMethod("GetService");
-                if (method != null)
+                var t = asm.GetType(typeName);
+                if (t != null)
                 {
-                    var generic = method.MakeGenericMethod(t);
-                    return generic.Invoke(item, null);
+                    var method = item.GetType().GetMethod("GetService", new Type[] { });
+                    if (method != null)
+                    {
+                        var generic = method.MakeGenericMethod(t);
+                        return generic.Invoke(item, null);
+                    }
                 }
             }
+            catch { }
         }
         return null;
+    }
+
+    static string TryGetAny(object o, string[] names)
+    {
+        foreach (var n in names)
+        {
+            string val = FastGet(o, n);
+            if (!string.IsNullOrEmpty(val)) return val;
+        }
+        return "";
     }
 
     static string J(string s)
