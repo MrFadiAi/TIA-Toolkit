@@ -8,7 +8,7 @@ using Siemens.Engineering.HW;
 
 /// <summary>
 /// TIA Portal Hardware Catalog Extractor
-/// Extracts hardware configuration (modules, order numbers, firmware, IPs, PROFINET names).
+/// Extracts hardware configuration (modules, order numbers, firmware, network info).
 ///
 /// Compile for TIA Portal V18-V19:
 ///   csc.exe /reference:"...\Siemens.Engineering.dll" /out:tia_extract_hardware.exe tia_extract_hardware.cs
@@ -123,13 +123,14 @@ class Program
         string ipAddress = "";
         string subnet = "";
         string profinetName = "";
+        string networkType = "";
         string comment = "";
         int positionNumber = 0;
 
         // TypeIdentifier property
         try { typeId = item.TypeIdentifier ?? ""; } catch { }
 
-        // Order number — GetAttribute, not property
+        // Order number — GetAttribute
         try
         {
             var v = item.GetAttribute("OrderNumber");
@@ -156,14 +157,14 @@ class Program
         try
         {
             var v = item.GetAttribute("Comment");
-            if (v != null) comment = v.ToString();
+            if (v != null && v.ToString().Length > 0) comment = v.ToString();
         }
         catch { }
 
         // Position number — property
         try { positionNumber = item.PositionNumber; } catch { }
 
-        // Network interface via runtime reflection for IP address
+        // Network interface via runtime reflection
         try
         {
             var niObj = ReflectGetService(item, "Siemens.Engineering.HW.Features.NetworkInterface");
@@ -177,44 +178,38 @@ class Program
                     {
                         foreach (var node in nodes)
                         {
-                            // Dump all node properties for first few modules
-                            if (moduleCount < 8)
-                            {
-                                Console.WriteLine("    [NetworkInterface Node for: {0}]", itemName);
-                                foreach (var p in node.GetType().GetProperties())
-                                {
-                                    try
-                                    {
-                                        var pv = p.GetValue(node);
-                                        string pvs = (pv != null) ? pv.ToString() : "(null)";
-                                        if (pvs.Length > 80) pvs = pvs.Substring(0, 80) + "...";
-                                        Console.WriteLine("      {0} ({1}): {2}", p.Name, p.PropertyType.Name, pvs);
-                                    }
-                                    catch (Exception ex)
-                                    {
-                                        Console.WriteLine("      {0}: ERROR: {1}", p.Name, ex.Message);
-                                    }
-                                }
-                            }
+                            // PROFINET name and network info from node properties
+                            profinetName = TryGet(node, new[] { "Name" });
 
-                            // Try ALL possible property names for IP and subnet
-                            ipAddress = TryGet(node, new[] { "IpV4Address", "IpAddress", "IPAddress", "Address" });
-                            subnet = TryGet(node, new[] { "IpV4SubnetMask", "SubnetMask", "Subnet" });
-                            profinetName = TryGet(node, new[] { "Name", "DeviceName", "ProfinetName" });
+                            // Network type (Ethernet, Mpi, Profibus, etc.)
+                            networkType = TryGet(node, new[] { "NodeType" });
+                            if (!string.IsNullOrEmpty(networkType))
+                                networkType = networkType.ToLower();
 
-                            // Also try GetAttribute on the node
+                            // IP address — try all possible property names
+                            ipAddress = TryGet(node, new[] { "IpV4Address", "IpAddress", "IPAddress" });
+
+                            // Try ConnectedSubnet for IP info
                             if (string.IsNullOrEmpty(ipAddress))
                             {
                                 try
                                 {
-                                    var ga = node.GetType().GetMethod("GetAttribute");
-                                    if (ga != null)
+                                    var csProp = node.GetType().GetProperty("ConnectedSubnet");
+                                    if (csProp != null)
                                     {
-                                        var result = ga.Invoke(node, new object[] { "IpV4Address" });
-                                        if (result != null) ipAddress = result.ToString();
+                                        var cs = csProp.GetValue(node);
+                                        if (cs != null)
+                                        {
+                                            ipAddress = TryGet(cs, new[] { "IpV4SubnetAddress", "Address" });
+                                            subnet = TryGet(cs, new[] { "IpV4SubnetMask", "SubnetMask" });
+                                        }
                                     }
                                 }
                                 catch { }
+                            }
+                            else
+                            {
+                                subnet = TryGet(node, new[] { "IpV4SubnetMask", "SubnetMask" });
                             }
 
                             break;
@@ -225,7 +220,7 @@ class Program
         }
         catch { }
 
-        // Include items with useful info OR PROFINET/network interfaces
+        // Include items with useful info or network interfaces
         bool hasInfo = !string.IsNullOrEmpty(orderNum) || !string.IsNullOrEmpty(ipAddress)
                      || !string.IsNullOrEmpty(firmware) || !string.IsNullOrEmpty(profinetName)
                      || (!string.IsNullOrEmpty(typeId) && !typeId.StartsWith("System:"));
@@ -250,6 +245,8 @@ class Program
                 json.AppendLine(indent + "  \"subnet_mask\": " + J(subnet) + ",");
             if (!string.IsNullOrEmpty(profinetName))
                 json.AppendLine(indent + "  \"profinet_name\": " + J(profinetName) + ",");
+            if (!string.IsNullOrEmpty(networkType))
+                json.AppendLine(indent + "  \"network_type\": " + J(networkType) + ",");
             if (!string.IsNullOrEmpty(comment))
                 json.AppendLine(indent + "  \"comment\": " + J(comment) + ",");
             if (positionNumber > 0)
@@ -315,6 +312,16 @@ class Program
                 {
                     var v = p.GetValue(o);
                     if (v != null) return v.ToString();
+                }
+                // Also check interfaces
+                foreach (var iface in o.GetType().GetInterfaces())
+                {
+                    p = iface.GetProperty(n);
+                    if (p != null)
+                    {
+                        var v = p.GetValue(o);
+                        if (v != null) return v.ToString();
+                    }
                 }
             }
             catch { }

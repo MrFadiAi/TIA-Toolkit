@@ -77,8 +77,8 @@ def generate_report(data, output_dir):
             lines.append("")
             continue
 
-        lines.append("| Module | Order Number | Firmware | IP Address | Subnet | PROFINET Name | Slot |")
-        lines.append("|--------|-------------|----------|------------|--------|--------------|------|")
+        lines.append("| Module | Order Number | Firmware | IP Address | Subnet | PROFINET Name | Network | Position |")
+        lines.append("|--------|-------------|----------|------------|--------|--------------|---------|----------|")
         for m in modules:
             lines.append(
                 f"| {m.get('module_name', '')} "
@@ -87,7 +87,8 @@ def generate_report(data, output_dir):
                 f"| {m.get('ip_address', '')} "
                 f"| {m.get('subnet_mask', '')} "
                 f"| {m.get('profinet_name', '')} "
-                f"| {m.get('slot', '')} |"
+                f"| {m.get('network_type', '')} "
+                f"| {m.get('position', '')} |"
             )
         lines.append("")
 
