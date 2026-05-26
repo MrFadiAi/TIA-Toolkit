@@ -131,25 +131,16 @@ class Program
         string ipAddress = "";
         string subnet = "";
         string profinetName = "";
-        int rack = -1, slot = -1;
+        int slot = -1;
 
-        // Type identifier / order number
+        // Type identifier / order number via reflection
         try { typeId = item.TypeIdentifier ?? ""; } catch { }
         try { orderNum = FastGet(item, "OrderNumber") ?? ""; } catch { }
 
-        // Firmware
-        try
-        {
-            var fw = item.GetService<DeviceFirmware>();
-            if (fw != null) firmware = fw.State.ToString();
-        }
-        catch { }
-        if (string.IsNullOrEmpty(firmware))
-        {
-            try { firmware = FastGet(item, "FirmwareVersion") ?? ""; } catch { }
-        }
+        // Firmware via reflection (DeviceFirmware type not available at compile time)
+        try { firmware = FastGet(item, "FirmwareVersion") ?? ""; } catch { }
 
-        // Network interface (IP address, PROFINET name)
+        // Network interface (IP, subnet, PROFINET name) — all via reflection
         try
         {
             var ni = item.GetService<NetworkInterface>();
@@ -157,29 +148,16 @@ class Program
             {
                 foreach (var node in ni.Nodes)
                 {
-                    try { ipAddress = node.IpAddress?.ToString() ?? ""; } catch { }
-                    try { subnet = node.SubnetMask?.ToString() ?? ""; } catch { }
+                    // Try multiple possible property names for cross-version compat
+                    try { ipAddress = FastGet(node, "IpV4Address") ?? FastGet(node, "IpAddress") ?? ""; } catch { }
+                    try { subnet = FastGet(node, "IpV4SubnetMask") ?? FastGet(node, "SubnetMask") ?? ""; } catch { }
+                    try { profinetName = FastGet(node, "Name") ?? ""; } catch { }
                     break;
                 }
             }
         }
         catch { }
-
-        // PROFINET device name
-        try
-        {
-            var pnIf = item.GetService<NetworkInterface>();
-            if (pnIf != null)
-            {
-                foreach (var node in pnIf.Nodes)
-                {
-                    try { profinetName = node.Name ?? ""; } catch { }
-                    break;
-                }
-            }
-        }
-        catch { }
-        if (string.IsNullOrEmpty(proinetName))
+        if (string.IsNullOrEmpty(profinetName))
         {
             try { profinetName = FastGet(item, "ProfinetName") ?? ""; } catch { }
         }
@@ -214,8 +192,8 @@ class Program
                 json.AppendLine(indent + "  \"ip_address\": " + J(ipAddress) + ",");
             if (!string.IsNullOrEmpty(subnet))
                 json.AppendLine(indent + "  \"subnet_mask\": " + J(subnet) + ",");
-            if (!string.IsNullOrEmpty(proinetName))
-                json.AppendLine(indent + "  \"profinet_name\": " + J(proinetName) + ",");
+            if (!string.IsNullOrEmpty(profinetName))
+                json.AppendLine(indent + "  \"profinet_name\": " + J(profinetName) + ",");
             if (slot >= 0)
                 json.AppendLine(indent + "  \"slot\": " + slot + ",");
 
@@ -223,7 +201,7 @@ class Program
             string lastLine = json.ToString().TrimEnd();
             if (lastLine.EndsWith(","))
             {
-                json.Length -= 3; // remove ",\r\n" or ",\n"
+                json.Length -= 3;
                 json.AppendLine();
             }
 
