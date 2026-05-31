@@ -49,6 +49,13 @@ BLOCK_TYPES = {
     "SW.Types.PlcStruct": "STRUCT",
 }
 
+# IEC address type mapping (used for address formatting)
+IEC_TYPE_MAP = {"Bool": "X", "Byte": "B", "Word": "W", "DWord": "D"}
+IEC_TYPE_MAP_FLAT = {"Bool": "", "Byte": "B", "Word": "W", "DWord": "D"}  # I/Q/M areas (no X for Bool)
+
+# Preferred language for comment extraction (overridden by --lang)
+PREFERRED_LANG = "en-US"
+
 # Interface section names that contain variables
 INTERFACE_SECTIONS = ["Input", "Output", "InOut", "Static", "Temp", "Constant", "Return"]
 
@@ -216,7 +223,7 @@ def parse_member(member_elem, depth=0):
     if comment_elem is not None:
         for mlt in comment_elem:
             if strip_ns(mlt.tag) == "MultiLanguageText":
-                if mlt.get("Lang", "") == "en-US" and mlt.text:
+                if mlt.get("Lang", "") == PREFERRED_LANG and mlt.text:
                     comment = mlt.text.strip()
                     break
         if not comment:
@@ -423,16 +430,14 @@ def _reconstruct_access(access_elem, parts):
                     offset = 0
                 if area == "DB" and blk:
                     byte_off = offset // 8
-                    type_map = {"Bool": "X", "Byte": "B", "Word": "W", "DWord": "D"}
-                    tp = type_map.get(dtype, "B")
+                    tp = IEC_TYPE_MAP.get(dtype, "B")
                     if dtype == "Bool":
                         parts.append(f"%DB{blk}.DB{tp}{byte_off}.{offset % 8}")
                     else:
                         parts.append(f"%DB{blk}.DB{tp}{byte_off}")
                 elif area in ("I", "Q", "M"):
                     byte_off = offset // 8
-                    type_map = {"Bool": "", "Byte": "B", "Word": "W", "DWord": "D"}
-                    tp = type_map.get(dtype, "")
+                    tp = IEC_TYPE_MAP_FLAT.get(dtype, "")
                     if dtype == "Bool":
                         parts.append(f"%{area}{byte_off}.{offset % 8}")
                     else:
@@ -556,16 +561,14 @@ def _format_address(addr_elem):
         offset = 0
     if area == "DB" and blk:
         byte_off = offset // 8
-        type_map = {"Bool": "X", "Byte": "B", "Word": "W", "DWord": "D"}
-        tp = type_map.get(dtype, "B")
+        tp = IEC_TYPE_MAP.get(dtype, "B")
         if dtype == "Bool":
             return f"%DB{blk}.DB{tp}{byte_off}.{offset % 8}"
         else:
             return f"%DB{blk}.DB{tp}{byte_off}"
     elif area in ("I", "Q", "M"):
         byte_off = offset // 8
-        type_map = {"Bool": "", "Byte": "B", "Word": "W", "DWord": "D"}
-        tp = type_map.get(dtype, "")
+        tp = IEC_TYPE_MAP_FLAT.get(dtype, "")
         if dtype == "Bool":
             return f"%{area}{byte_off}.{offset % 8}"
         else:
@@ -1212,7 +1215,7 @@ def parse_tag_tables(tags_dir):
                                                             culture = (ia_field.text or "").strip()
                                                 elif ia_tag == "Text":
                                                     text = (ia.text or "").strip()
-                                            if culture == "en-US" and text:
+                                            if culture == PREFERRED_LANG and text:
                                                 comment = text
                                                 break
                                     break
@@ -1406,7 +1409,7 @@ def parse_block_file(filepath, rel_path):
                                             text = (field.text or "").strip()
                                     if culture:
                                         cultures.add(culture)
-                                    if culture == "en-US" and text:
+                                    if culture == PREFERRED_LANG and text:
                                         if comp_name == "Title":
                                             block_title = text
                                         else:
@@ -1546,7 +1549,12 @@ def main():
                         help="Print detailed progress")
     parser.add_argument("--plc-name", default=None,
                         help="PLC device name (stored in cache for report generation)")
+    parser.add_argument("--lang", default="en-US",
+                        help="Preferred culture for comments (default: en-US)")
     args = parser.parse_args()
+
+    global PREFERRED_LANG
+    PREFERRED_LANG = args.lang
 
     blocks_path = args.blocks_path.replace("\\", "/")
     if not os.path.exists(blocks_path):

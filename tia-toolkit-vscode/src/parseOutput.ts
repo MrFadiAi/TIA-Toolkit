@@ -47,30 +47,38 @@ export interface ReportEntry {
     fullPath: string;
 }
 
-export function scanReports(docOutput: string): ReportEntry[] {
+export function scanReports(docOutput: string, mode: string = 'md'): ReportEntry[] {
     const fs = require('fs');
     const path = require('path');
     const results: ReportEntry[] = [];
 
-    function walk(dir: string, base: string) {
+    function walk(dir: string, base: string, extension: string) {
         if (!fs.existsSync(dir)) { return; }
         for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
             const full = path.join(dir, entry.name);
             if (entry.isDirectory()) {
-                walk(full, path.join(base, entry.name));
-            } else if (entry.name.endsWith('.md')) {
+                walk(full, path.join(base, entry.name), extension);
+            } else if (entry.name.endsWith(extension)) {
                 results.push({ name: path.join(base, entry.name), fullPath: full });
             }
         }
     }
 
-    walk(path.join(docOutput, 'hmi_screens'), 'hmi_screens');
-    walk(path.join(docOutput, 'Program_Blocks'), 'Program_Blocks');
-    walk(path.join(docOutput, 'analysis'), 'analysis');
+    // MD sources (Program_Blocks, hmi_screens, analysis, CLAUDE.md)
+    if (mode === 'md' || mode === 'both') {
+        walk(path.join(docOutput, 'hmi_screens'), 'hmi_screens', '.md');
+        walk(path.join(docOutput, 'Program_Blocks'), 'Program_Blocks', '.md');
+        walk(path.join(docOutput, 'analysis'), 'analysis', '.md');
 
-    const claudeMd = path.join(docOutput, 'CLAUDE.md');
-    if (fs.existsSync(claudeMd)) {
-        results.push({ name: 'CLAUDE.md', fullPath: claudeMd });
+        const claudeMd = path.join(docOutput, 'CLAUDE.md');
+        if (fs.existsSync(claudeMd)) {
+            results.push({ name: 'CLAUDE.md', fullPath: claudeMd });
+        }
+    }
+
+    // XML sources (raw TIA Portal exports)
+    if (mode === 'xml' || mode === 'both') {
+        walk(path.join(docOutput, 'DATA_Program blocks'), 'DATA_Program blocks', '.xml');
     }
 
     results.sort((a, b) => a.name.localeCompare(b.name));

@@ -114,6 +114,8 @@ var savedPlcConsole = savedState.plcConsole || [];
 var savedHmiConsole = savedState.hmiConsole || [];
 var savedAnalysisConsole = savedState.analysisConsole || [];
 var currentReport = savedState.currentReport || '';
+var reportViewMode = savedState.reportViewMode || 'md';
+window.__reportFiles = [];
 
 function saveState() {
     vscode.setState({
@@ -123,6 +125,7 @@ function saveState() {
         hmi: savedHmi,
         plcOutput: savedPlcOutput,
         currentReport: currentReport,
+        reportViewMode: reportViewMode,
         plcConsole: savedPlcConsole,
         hmiConsole: savedHmiConsole,
         analysisConsole: savedAnalysisConsole
@@ -147,6 +150,18 @@ document.querySelectorAll('.tab-btn').forEach(function(btn) {
 });
 document.querySelectorAll('.seg-btn').forEach(function(btn) {
     btn.addEventListener('click', function() { setVersion(btn.dataset.version); vscode.postMessage({ type: 'setVersion', version: tiaVersion }); });
+});
+
+function setReportViewMode(mode) {
+    reportViewMode = mode;
+    document.querySelectorAll('#report-view-mode .seg-btn').forEach(function(b) {
+        b.classList.toggle('active', b.dataset.view === mode);
+    });
+    saveState();
+    vscode.postMessage({ type: 'setReportViewMode', mode: mode });
+}
+document.querySelectorAll('#report-view-mode .seg-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() { setReportViewMode(btn.dataset.view); });
 });
 
 function action(type, payload) {
@@ -271,7 +286,12 @@ document.getElementById('btn-refresh-reports').addEventListener('click', functio
 });
 document.getElementById('report-select').addEventListener('change', function(e) {
     currentReport = e.target.value; saveState();
-    action('loadReport', { name: e.target.value });
+    var fullPath = '';
+    if (window.__reportFiles) {
+        var found = window.__reportFiles.find(function(f) { return f.name === e.target.value; });
+        if (found) fullPath = found.fullPath;
+    }
+    action('loadReport', { name: e.target.value, fullPath: fullPath });
 });
 document.getElementById('btn-open-editor').addEventListener('click', function() {
     var name = document.getElementById('report-select').value;
@@ -323,6 +343,7 @@ window.addEventListener('message', function(event) {
         case 'devices': populateDevices(msg.plc, msg.hmi); break;
         case 'compileStatus': setStatus(msg.id, msg.text, msg.cls); break;
         case 'reports':
+            window.__reportFiles = msg.files;
             var sel = document.getElementById('report-select');
             sel.innerHTML = '';
             if (msg.files.length === 0) {
@@ -334,10 +355,10 @@ window.addEventListener('message', function(event) {
                     opt.textContent = f.name;
                     sel.appendChild(opt);
                 });
-                // Auto-load first report only if none was previously selected (matches gui.py)
+                // Auto-load first report only if none was previously selected
                 if (!currentReport) {
                     sel.selectedIndex = 0;
-                    vscode.postMessage({ type: 'loadReport', name: msg.files[0].name });
+                    vscode.postMessage({ type: 'loadReport', name: msg.files[0].name, fullPath: msg.files[0].fullPath });
                 }
             }
             break;
@@ -362,6 +383,7 @@ window.addEventListener('message', function(event) {
 // ── Restore state on load ──────────────────────────────────────────────
 if (savedState.tiaVersion) setVersion(savedState.tiaVersion);
 if (savedState.activeTab) switchTab(savedState.activeTab);
+if (savedState.reportViewMode) setReportViewMode(savedState.reportViewMode);
 if (savedPlc.length > 0 || savedHmi.length > 0) populateDevices(savedPlc, savedHmi);
 if (savedPlcOutput) document.getElementById('plc-output-path').value = savedPlcOutput;
 savedPlcConsole.forEach(function(l) {
@@ -472,6 +494,11 @@ const HTML = `<!DOCTYPE html>
                 <select class="select select-wide" id="report-select"><option value="">-- no reports --</option></select>
             </div>
             <div class="step-row" style="margin-bottom:6px">
+                <div class="version-selector" id="report-view-mode" style="margin-right:8px">
+                    <button class="seg-btn" data-view="xml">XML Source</button>
+                    <button class="seg-btn active" data-view="md">MD Reports</button>
+                    <button class="seg-btn" data-view="both">Both</button>
+                </div>
                 <button class="btn" id="btn-refresh-reports">Refresh</button>
                 <button class="btn" id="btn-open-editor">Open</button>
                 <button class="btn" id="btn-gen-claudemd">CLAUDE.md</button>

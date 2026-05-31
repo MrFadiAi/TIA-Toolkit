@@ -5,6 +5,7 @@ import customtkinter as ctk
 import threading
 import subprocess
 import os
+import sys
 import re
 import shutil
 import glob
@@ -16,6 +17,13 @@ SIDEBAR_W = 200
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
 DOC_OUTPUT = os.path.join(PROJECT_ROOT, "Doc_OUTPUT")
+
+# ── Build tool paths (auto-discover or use defaults) ───────────────────────
+CSC_PATH = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+SIEMENS_V18_DLL = r"C:\Program Files\Siemens\Automation\Portal V18\PublicAPI\V18\Siemens.Engineering.dll"
+SIEMENS_V21_BASE = r"C:\Program Files\Siemens\Automation\Portal V21\PublicAPI\V21\net48"
+# Use the current Python interpreter (works in venv, conda, etc.)
+PYTHON = sys.executable
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
@@ -53,13 +61,20 @@ def parse_hmi_instances(text):
     return instances
 
 
-def scan_reports():
-    """Scan for .md report files in all output directories."""
-    files = glob.glob(os.path.join(DOC_OUTPUT, "hmi_screens", "*.md"))
-    files += glob.glob(os.path.join(DOC_OUTPUT, "Program_Blocks", "**", "*.md"), recursive=True)
-    claudemd = os.path.join(DOC_OUTPUT, "CLAUDE.md")
-    if os.path.exists(claudemd):
-        files.append(claudemd)
+def scan_reports(mode="md"):
+    """Scan for report files. mode: 'md' (reports), 'xml' (source), or 'both'."""
+    files = []
+    # MD sources (Program_Blocks, hmi_screens, analysis, CLAUDE.md)
+    if mode in ("md", "both"):
+        files += glob.glob(os.path.join(DOC_OUTPUT, "hmi_screens", "*.md"))
+        files += glob.glob(os.path.join(DOC_OUTPUT, "Program_Blocks", "**", "*.md"), recursive=True)
+        files += glob.glob(os.path.join(DOC_OUTPUT, "analysis", "**", "*.md"), recursive=True)
+        claudemd = os.path.join(DOC_OUTPUT, "CLAUDE.md")
+        if os.path.exists(claudemd):
+            files.append(claudemd)
+    # XML sources (raw TIA Portal exports)
+    if mode in ("xml", "both"):
+        files += glob.glob(os.path.join(DOC_OUTPUT, "DATA_Program blocks", "**", "*.xml"), recursive=True)
     return sorted(files)
 
 
@@ -263,15 +278,15 @@ class TiaToolkitApp(ctk.CTk):
 
     def _compile_exporter(self):
         v = self.tia_version.get()
-        csc = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+        csc = CSC_PATH
         cs_file = os.path.join(SCRIPT_DIR, "tia_export_blocks.cs")
 
         if v == "V18-V19":
-            dll = r"C:\Program Files\Siemens\Automation\Portal V18\PublicAPI\V18\Siemens.Engineering.dll"
+            dll = SIEMENS_V18_DLL
             out = os.path.join(SCRIPT_DIR, "tia_export_blocks_v18.exe")
             cmd = [csc, f"/reference:{dll}", f"/out:{out}", cs_file]
         else:
-            base = r"C:\Program Files\Siemens\Automation\Portal V21\PublicAPI\V21\net48"
+            base = SIEMENS_V21_BASE
             out = os.path.join(SCRIPT_DIR, "tia_export_blocks.exe")
             cmd = [csc,
                    f"/reference:{base}\\Siemens.Engineering.Base.dll",
@@ -310,13 +325,13 @@ class TiaToolkitApp(ctk.CTk):
         self.log("Parsing exported blocks...")
         path = self.plc_output_var.get()
         dev = self._device_from_label(self.plc_device_var.get())
-        cmd = ["python", os.path.join(SCRIPT_DIR, "extract_plc_full.py"), path, "--verbose", "--plc-name", dev]
+        cmd = [PYTHON, os.path.join(SCRIPT_DIR, "extract_plc_full.py"), path, "--verbose", "--plc-name", dev]
         self.run_command(cmd, on_complete=lambda rc2, _: self._on_parse_plc_done(rc2))
 
     def _parse_plc(self):
         path = self.plc_output_var.get()
         self.clear_console()
-        self.run_command(["python", os.path.join(SCRIPT_DIR, "extract_plc_full.py"), path, "--verbose"],
+        self.run_command([PYTHON, os.path.join(SCRIPT_DIR, "extract_plc_full.py"), path, "--verbose"],
                          on_complete=lambda rc, _: self._on_parse_plc_done(rc))
 
     def _on_parse_plc_done(self, rc):
@@ -324,11 +339,11 @@ class TiaToolkitApp(ctk.CTk):
             self.log("Parse failed. Cannot generate markdown reports.")
             return
         self.log("Generating PLC markdown reports...")
-        self.run_command(["python", os.path.join(SCRIPT_DIR, "plc_report.py")])
+        self.run_command([PYTHON, os.path.join(SCRIPT_DIR, "plc_report.py")])
 
     def _gen_plc_report(self):
         self.clear_console()
-        self.run_command(["python", os.path.join(SCRIPT_DIR, "plc_report.py")])
+        self.run_command([PYTHON, os.path.join(SCRIPT_DIR, "plc_report.py")])
 
     # ═══════════════════════════════════════════════════════════════════
     # HMI PAGE
@@ -401,15 +416,15 @@ class TiaToolkitApp(ctk.CTk):
 
     def _compile_hmi_extractor(self):
         v = self.tia_version.get()
-        csc = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+        csc = CSC_PATH
         cs_file = os.path.join(SCRIPT_DIR, "tia_extract.cs")
 
         if v == "V18-V19":
-            dll = r"C:\Program Files\Siemens\Automation\Portal V18\PublicAPI\V18\Siemens.Engineering.dll"
+            dll = SIEMENS_V18_DLL
             out = os.path.join(SCRIPT_DIR, "tia_extract_v18.exe")
             cmd = [csc, f"/reference:{dll}", f"/out:{out}", cs_file]
         else:
-            base = r"C:\Program Files\Siemens\Automation\Portal V21\PublicAPI\V21\net48"
+            base = SIEMENS_V21_BASE
             out = os.path.join(SCRIPT_DIR, "tia_extract.exe")
             cmd = [csc,
                    f"/reference:{base}\\Siemens.Engineering.Base.dll",
@@ -447,11 +462,11 @@ class TiaToolkitApp(ctk.CTk):
             self.log("Extraction failed. Cannot generate markdown reports.")
             return
         self.log("Generating markdown reports...")
-        self.run_command(["python", os.path.join(SCRIPT_DIR, "hmi_report.py")])
+        self.run_command([PYTHON, os.path.join(SCRIPT_DIR, "hmi_report.py")])
 
     def _gen_hmi_report(self):
         self.clear_console()
-        self.run_command(["python", os.path.join(SCRIPT_DIR, "hmi_report.py")])
+        self.run_command([PYTHON, os.path.join(SCRIPT_DIR, "hmi_report.py")])
 
     # ═══════════════════════════════════════════════════════════════════
     # ANALYSIS PAGE
@@ -535,7 +550,7 @@ class TiaToolkitApp(ctk.CTk):
             self.log("Enter a search query first.")
             return
         type_flag = self.xref_type_var.get().lower()
-        cmd = ["python", os.path.join(SCRIPT_DIR, "cross_reference.py"), query]
+        cmd = [PYTHON, os.path.join(SCRIPT_DIR, "cross_reference.py"), query]
         if type_flag != "auto":
             cmd.append(f"--{type_flag}")
         self.clear_console()
@@ -545,28 +560,28 @@ class TiaToolkitApp(ctk.CTk):
     def _run_dead_code(self):
         self.clear_console()
         self.log("Running dead code analysis...")
-        self.run_command(["python", os.path.join(SCRIPT_DIR, "dead_code_analysis.py")])
+        self.run_command([PYTHON, os.path.join(SCRIPT_DIR, "dead_code_analysis.py")])
 
     def _run_traceability(self):
         self.clear_console()
         self.log("Generating traceability matrix...")
-        self.run_command(["python", os.path.join(SCRIPT_DIR, "traceability_matrix.py")])
+        self.run_command([PYTHON, os.path.join(SCRIPT_DIR, "traceability_matrix.py")])
 
     def _run_dependency_graph(self):
         self.clear_console()
         self.log("Generating dependency graph...")
-        self.run_command(["python", os.path.join(SCRIPT_DIR, "dependency_graph.py")])
+        self.run_command([PYTHON, os.path.join(SCRIPT_DIR, "dependency_graph.py")])
 
     def _compile_hardware(self):
         v = self.tia_version.get()
-        csc = r"C:\Windows\Microsoft.NET\Framework64\v4.0.30319\csc.exe"
+        csc = CSC_PATH
         cs_file = os.path.join(SCRIPT_DIR, "tia_extract_hardware.cs")
 
         if v == "V18-V19":
-            dll = r"C:\Program Files\Siemens\Automation\Portal V18\PublicAPI\V18\Siemens.Engineering.dll"
+            dll = SIEMENS_V18_DLL
             cmd = [csc, f"/reference:{dll}", f"/out:{os.path.join(SCRIPT_DIR, 'tia_extract_hardware.exe')}", cs_file]
         else:
-            base = r"C:\Program Files\Siemens\Automation\Portal V21\PublicAPI\V21\net48"
+            base = SIEMENS_V21_BASE
             cmd = [csc,
                    f"/reference:{base}\\Siemens.Engineering.Base.dll",
                    f"/reference:{base}\\Siemens.Engineering.Step7.dll",
@@ -602,7 +617,7 @@ class TiaToolkitApp(ctk.CTk):
             self.log("Extraction failed.")
             return
         self.log("Generating hardware report...")
-        self.run_command(["python", os.path.join(SCRIPT_DIR, "hardware_report.py")])
+        self.run_command([PYTHON, os.path.join(SCRIPT_DIR, "hardware_report.py")])
 
     def _pipeline_device_by_name(self, name):
         """Find device dict by display name from pipeline dropdown."""
@@ -632,25 +647,25 @@ class TiaToolkitApp(ctk.CTk):
             exe = os.path.join(SCRIPT_DIR, "tia_export_blocks_v18.exe" if v == "V18-V19" else "tia_export_blocks.exe")
             out = os.path.join(DOC_OUTPUT, "DATA_Program blocks")
             self._pipeline_steps.append(("Export PLC blocks", [exe, out, plc_device]))
-            self._pipeline_steps.append(("Parse PLC blocks", ["python", os.path.join(SCRIPT_DIR, "extract_plc_full.py"), out, "--verbose", "--plc-name", plc_device]))
-            self._pipeline_steps.append(("Generate PLC reports", ["python", os.path.join(SCRIPT_DIR, "plc_report.py")]))
+            self._pipeline_steps.append(("Parse PLC blocks", [PYTHON, os.path.join(SCRIPT_DIR, "extract_plc_full.py"), out, "--verbose", "--plc-name", plc_device]))
+            self._pipeline_steps.append(("Generate PLC reports", [PYTHON, os.path.join(SCRIPT_DIR, "plc_report.py")]))
 
         if hmi_device:
             v = self.tia_version.get()
             exe = os.path.join(SCRIPT_DIR, "tia_extract_v18.exe" if v == "V18-V19" else "tia_extract.exe")
             json_path = os.path.join(DOC_OUTPUT, ".hmi_online_data.json")
             self._pipeline_steps.append(("Extract HMI data", [exe, json_path, hmi_device]))
-            self._pipeline_steps.append(("Generate HMI reports", ["python", os.path.join(SCRIPT_DIR, "hmi_report.py")]))
+            self._pipeline_steps.append(("Generate HMI reports", [PYTHON, os.path.join(SCRIPT_DIR, "hmi_report.py")]))
 
-        self._pipeline_steps.append(("Dead code analysis", ["python", os.path.join(SCRIPT_DIR, "dead_code_analysis.py")]))
-        self._pipeline_steps.append(("Traceability matrix", ["python", os.path.join(SCRIPT_DIR, "traceability_matrix.py")]))
-        self._pipeline_steps.append(("Dependency graph", ["python", os.path.join(SCRIPT_DIR, "dependency_graph.py")]))
+        self._pipeline_steps.append(("Dead code analysis", [PYTHON, os.path.join(SCRIPT_DIR, "dead_code_analysis.py")]))
+        self._pipeline_steps.append(("Traceability matrix", [PYTHON, os.path.join(SCRIPT_DIR, "traceability_matrix.py")]))
+        self._pipeline_steps.append(("Dependency graph", [PYTHON, os.path.join(SCRIPT_DIR, "dependency_graph.py")]))
 
         hw_exe = os.path.join(SCRIPT_DIR, "tia_extract_hardware.exe")
         if os.path.exists(hw_exe):
             self._pipeline_steps.append(("Extract hardware", [hw_exe, os.path.join(DOC_OUTPUT, ".hardware.json")]))
 
-        self._pipeline_steps.append(("Generate CLAUDE.md", ["python", os.path.join(SCRIPT_DIR, "generate_claudemd.py")]))
+        self._pipeline_steps.append(("Generate CLAUDE.md", [PYTHON, os.path.join(SCRIPT_DIR, "generate_claudemd.py")]))
 
         self._pipeline_idx = 0
         self._pipeline_total = len(self._pipeline_steps)
@@ -672,7 +687,7 @@ class TiaToolkitApp(ctk.CTk):
 
     def _on_hw_extract_then_continue(self, rc):
         if rc == 0:
-            self.run_command(["python", os.path.join(SCRIPT_DIR, "hardware_report.py")],
+            self.run_command([PYTHON, os.path.join(SCRIPT_DIR, "hardware_report.py")],
                              on_complete=lambda rc2, _: self._advance_pipeline(rc2))
         else:
             self._advance_pipeline(rc)
@@ -697,33 +712,52 @@ class TiaToolkitApp(ctk.CTk):
 
         cf = ctk.CTkFrame(p)
         cf.grid(row=0, column=0, sticky="ew", pady=(0, 5))
-        cf.grid_columnconfigure(0, weight=1)
+        cf.grid_columnconfigure(1, weight=1)
+
+        # View mode selector: XML Source / MD Reports / Both
+        self.report_view_mode = ctk.StringVar(value="md")
+        ctk.CTkSegmentedButton(
+            cf,
+            values=["xml", "md", "both"],
+            variable=self.report_view_mode,
+            command=self._on_view_mode_change,
+            font=ctk.CTkFont(size=11),
+        ).grid(row=0, column=0, padx=(10, 5), pady=6)
+
         self.report_file_var = ctk.StringVar()
         self.report_dd = ctk.CTkOptionMenu(cf, variable=self.report_file_var, values=["-- no reports --"],
                                            command=self._load_report)
-        self.report_dd.grid(row=0, column=0, padx=10, pady=6, sticky="ew")
-        ctk.CTkButton(cf, text="Refresh", width=100, command=self._refresh_reports).grid(row=0, column=1, padx=5, pady=6)
-        ctk.CTkButton(cf, text="Open in Editor", width=130, command=self._open_editor).grid(row=0, column=2, padx=5, pady=6)
-        ctk.CTkButton(cf, text="Generate CLAUDE.md", width=160, command=self._gen_claudemd).grid(row=0, column=3, padx=5, pady=6)
-        ctk.CTkButton(cf, text="Export Bundle", width=130, command=self._export_bundle).grid(row=0, column=4, padx=5, pady=6)
+        self.report_dd.grid(row=0, column=1, padx=5, pady=6, sticky="ew")
+        ctk.CTkButton(cf, text="Refresh", width=100, command=self._refresh_reports).grid(row=0, column=2, padx=5, pady=6)
+        ctk.CTkButton(cf, text="Open in Editor", width=130, command=self._open_editor).grid(row=0, column=3, padx=5, pady=6)
+        ctk.CTkButton(cf, text="Generate CLAUDE.md", width=160, command=self._gen_claudemd).grid(row=0, column=4, padx=5, pady=6)
+        ctk.CTkButton(cf, text="Export Bundle", width=130, command=self._export_bundle).grid(row=0, column=5, padx=5, pady=6)
 
         self.report_text = ctk.CTkTextbox(p, font=ctk.CTkFont(family="Consolas", size=12), wrap="none")
         self.report_text.grid(row=1, column=0, sticky="nsew")
 
     def _refresh_reports(self):
-        files = scan_reports()
+        mode = self.report_view_mode.get() if hasattr(self, 'report_view_mode') else "md"
+        files = scan_reports(mode)
         if not files:
             self.report_dd.configure(values=["-- no reports --"])
             self.report_file_var.set("-- no reports --")
             self._report_files = {}
             return
-        # Store basename -> full path mapping for subdirectory support
-        self._report_files = {os.path.basename(f): f for f in files}
+        # Store relative path -> full path mapping (avoids basename collisions for XML files)
+        self._report_files = {}
+        for f in files:
+            rel = os.path.relpath(f, DOC_OUTPUT)
+            self._report_files[rel] = f
         names = list(self._report_files.keys())
         self.report_dd.configure(values=names)
         if not self.report_file_var.get() or self.report_file_var.get().startswith("--"):
             self.report_file_var.set(names[0])
             self._load_report(names[0])
+
+    def _on_view_mode_change(self, value):
+        """Called when the report view mode selector changes."""
+        self._refresh_reports()
 
     def _load_report(self, name=None):
         if name is None or name.startswith("--"):
@@ -764,7 +798,7 @@ class TiaToolkitApp(ctk.CTk):
         self._active_console = self.plc_console
         self._active_progress = self.plc_progress
         self.run_command(
-            ["python", os.path.join(SCRIPT_DIR, "generate_claudemd.py")],
+            [PYTHON, os.path.join(SCRIPT_DIR, "generate_claudemd.py")],
             on_complete=lambda rc, _: self._on_claudemd_done(rc),
         )
 

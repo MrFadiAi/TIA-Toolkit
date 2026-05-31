@@ -156,9 +156,9 @@ def extract_plc_tags(js_code):
         r'SetBitInTag\("([^"]+)"',
         r'ResetBitInTag\("([^"]+)"',
         r'TagValue\("([^"]+)"\)',
+        # Generic quoted tag references: DB_xxx, or any UPPER_CASE tag name
+        r'"([A-Z][A-Z0-9_]*_[A-Z0-9_ .\-]+)"',
         r'"(DB_[A-Z_0-9][A-Z_0-9 .\-]+)"',
-        r'"(HOPPER_[A-Z_0-9]+)"',
-        r'"(DataToerenw_[A-Z_0-9]+)"',
     ]
     for pattern in patterns:
         for match in re.finditer(pattern, js_code):
@@ -235,7 +235,7 @@ def extract_element_details(data):
         # Extract tag references from the binary region near this element
         tag_refs = []
         region_str = region.decode('utf-8', errors='ignore')
-        for tm in re.finditer(r'(DB_[A-Z_][A-Z_0-9 .\-]{5,}|HOPPER_[A-Z_0-9]+|DataToerenw_[A-Z_0-9]+)', region_str):
+        for tm in re.finditer(r'([A-Z][A-Z0-9_]*_[A-Z0-9_ .\-]{4,})', region_str):
             tag_refs.append(tm.group(1).strip())
 
         elements.append({
@@ -264,30 +264,26 @@ def parse_screen_rdf(filepath, hmi_tags, ocr_data):
             all_strings.append(s)
 
     screen_name = None
-    known_screens = [
-        'START_SCHERM', 'WERKSCHERM', 'MANUEEL', 'AUTO_STAND',
-        'INSTELLINGEN', 'ALARM', 'ALARMS_1', 'ALARMS_2',
-        'MANUEEL_BANDEN_MIXAS', 'MANUEEL_VLOER',
-        '00_ALGEMEEN', '01_ALGEMEEN', '01_HOPPER_OPVOER_BANDEN',
-        '02_HOPPER_SPITASSEN', '03_HOPPER_VLOER',
-        'HOPPER02_VETPOMP', 'VERLICHTING_HOPPER', 'BELTS_STATUS',
-        '01_HOPPER_LINIAAL_INSTELLING', '02_HOPPER_LINIAAL01',
-        'TIJD', 'WEIDMULLER', 'WEIDMULLER_WEGING',
-        '05_HOPPER_SPITAS_DRUK', '08_HOPPER_LINIAAL_STATUS',
-        'SYS_ANALOOG_STROOM_MIXAS', 'BEWAKINGEN', 'TOERENWACHTER',
-        'TALEN', 'PROCES_1', 'PROCES_2', 'WATER',
-        '01 ALARMS_GENERAL', '02 ALARMS HOPPER',
-    ]
+    # Auto-detect screen name from binary strings — no project-specific list needed.
+    # Strategy: look for strings matching TIA Portal screen naming patterns:
+    #   - UPPER_SNAKE_CASE (e.g., START_SCHERM, ALARM)
+    #   - Mixed case with spaces (e.g., "Main Program Sweep")
+    #   - Alphanumeric with underscores/dots (e.g., 01_ALGEMEEN)
+    _skip_patterns = ('LAYER', 'MODULE', 'FONT', 'COLOR', 'IMAGE', 'STYLE',
+                      'TOOLBAR', 'BUTTON_', 'FACEPLATE', 'TEMPLATE', 'VERSION',
+                      'AUTHOR', 'CREATED', 'MODIFIED', 'SIEMENS')
     for s in all_strings:
-        for known in known_screens:
-            if known in s and len(s) < len(known) + 5:
-                screen_name = known
-                break
-        if screen_name:
+        # Skip common non-screen strings
+        if any(skip in s.upper() for skip in _skip_patterns):
+            continue
+        # Match screen-like names: UPPER_SNAKE_CASE, Title_Case, or numeric_prefix names
+        if re.match(r'^[A-Z0-9][A-Z0-9_ ]{2,}$', s) and len(s) >= 3 and len(s) < 60:
+            screen_name = s
             break
     if not screen_name:
+        # Broader fallback: any plausible screen name
         for s in all_strings:
-            if re.match(r'^[A-Z][A-Z0-9_]{3,}$', s) and 'LAYER' not in s.upper() and 'Module' not in s:
+            if re.match(r'^[A-Za-z][A-Za-z0-9_ ]{2,}$', s) and 'Layer' not in s and 'Module' not in s:
                 screen_name = s
                 break
 

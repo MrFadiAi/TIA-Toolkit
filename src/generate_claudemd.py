@@ -256,15 +256,35 @@ def get_key_blocks(blocks):
 # Smart analysis helpers
 # ---------------------------------------------------------------------------
 
+def _find_main_ob(blocks):
+    """Find the main cyclic OB — prefer OB1, fallback to first ProgramCycle OB."""
+    for b in blocks:
+        if b.get("block_type") == "OB" and b.get("block_number") == 1:
+            return b
+    # Fallback: find first OB with SecondaryType=ProgramCycle
+    for b in blocks:
+        if b.get("block_type") == "OB" and b.get("secondary_type") == "ProgramCycle":
+            return b
+    # Last resort: first OB by number
+    obs = [b for b in blocks if b.get("block_type") == "OB"]
+    if obs:
+        return min(obs, key=lambda b: b.get("block_number", 999))
+    return None
+
+
 def build_execution_order(plc_data):
-    """Extract OB1 main program execution order."""
+    """Extract main program execution order from the primary cyclic OB."""
     if not plc_data:
         return []
     blocks = plc_data.get("blocks", [])
-    for b in blocks:
-        if b.get("block_type") == "OB" and b.get("block_number") == 1:
-            return b.get("calls", [])
-    return plc_data.get("call_tree", {}).get("Main", [])
+    main_ob = _find_main_ob(blocks)
+    if main_ob:
+        return main_ob.get("calls", [])
+    # Fallback to call_tree
+    call_tree = plc_data.get("call_tree", {})
+    if call_tree:
+        return list(list(call_tree.values())[0]) if call_tree else []
+    return []
 
 
 def build_instance_db_map(blocks):
@@ -724,11 +744,23 @@ def _short_folder(folder):
     return parts[-1].strip()
 
 
+def _clean_idb_name(name):
+    """Clean instance DB name by stripping common type prefixes dynamically."""
+    # Strip known structural prefixes (FBDB_, DB_) but NOT project-specific ones
+    for prefix in ("FBDB_", "IDB_"):
+        if name.startswith(prefix):
+            return name[len(prefix):]
+    # For DB_ prefix, only strip if followed by a number (DB4_ → strip)
+    if re.match(r'^DB\d+_', name):
+        return re.sub(r'^DB\d+_', '', name)
+    return name
+
+
 # ---------------------------------------------------------------------------
 # CLAUDE.md generation
 # ---------------------------------------------------------------------------
 
-def generate_claude_md(plc_data, hmi_data):
+def generate_claude_md(plc_data, hmi_data, hmi_path=""):
     """Assemble comprehensive CLAUDE.md with front-loaded critical info."""
     lines = []
 
@@ -797,7 +829,7 @@ def generate_claude_md(plc_data, hmi_data):
     lines.append("### Code Style")
     comment_lang = _detect_comment_language(blocks) if blocks else "English"
     lang_note = f"Comments in {comment_lang}" if comment_lang != "English" else "Comments in project language"
-    lines.append(f"- Primary language: **{primary_lang}** — Prefer SCL for new blocks (structured, readable)")
+    lines.append(f"- Primary language: **{primary_lang}** — Prefer {primary_lang} for new blocks (match project conventions)")
     lines.append("- Use meaningful variable names matching existing conventions")
     lines.append(f"- {lang_note}, UPPER_SNAKE_CASE for all tags and blocks")
     lines.append("- Use symbolic names, never absolute addresses (`\"Tag_Name\"` not `%I0.0`)")
@@ -843,7 +875,9 @@ def generate_claude_md(plc_data, hmi_data):
     lines.append("")
 
     lines.append("### Analyzing Call Chains")
-    lines.append("1. Start from OB1 Main (see Execution Order below)")
+    main_ob = _find_main_ob(blocks) if blocks else None
+    ob_ref = f"OB{main_ob['block_number']}" if main_ob else "main cyclic OB"
+    lines.append(f"1. Start from {ob_ref} Main (see Execution Order below)")
     lines.append("2. Follow calls downward via each block's \"Calls\" section")
     lines.append("3. Check data dependencies via Data Flow Map")
     lines.append("4. Use Instance DB Mapping for FB instance data blocks")
@@ -955,7 +989,7 @@ def generate_claude_md(plc_data, hmi_data):
                     grp = fb_groups[fb_name]
                     count = len(grp)
                     idb_names = ", ".join(
-                        b.get("block_name", "?").replace("DB_LIJN_", "").replace("DB_", "").replace("FBDB_", "")
+                        _clean_idb_name(b.get("block_name", "?"))
                         for b in sorted(grp, key=lambda x: x.get("block_name", ""))[:5]
                     )
                     if count > 5:
@@ -968,9 +1002,11 @@ def generate_claude_md(plc_data, hmi_data):
     if plc_data:
         exec_order = build_execution_order(plc_data)
         if exec_order:
-            lines.append("## Execution Order (OB1 Main)")
+            main_ob = _find_main_ob(blocks)
+            ob_label = f"OB{main_ob['block_number']}" if main_ob else "Main OB"
+            lines.append(f"## Execution Order ({ob_label} Main)")
             lines.append("")
-            lines.append("OB1 cyclic call sequence (PLC scan order):")
+            lines.append(f"{ob_label} cyclic call sequence (PLC scan order):")
             lines.append("")
             for i, call in enumerate(exec_order, 1):
                 sub_calls = call_tree.get(call, [])
@@ -1236,8 +1272,9 @@ def generate_claude_md(plc_data, hmi_data):
     if hmi_data:
         lines.append("├── hmi_screens/                           <- HMI screen .md reports + hmi_tags.md")
     lines.append("├── .plc_cache.json                        <- PLC extraction cache")
-    if hmi_data:
-        lines.append("└── .hmi_merged.json                       <- Merged HMI data")
+    if hmi_data and hmi_path:
+        hmi_name = os.path.basename(hmi_path)
+        lines.append(f"└── {hmi_name:39s} <- HMI data")
     lines.append("```")
     lines.append("")
 
@@ -1269,7 +1306,7 @@ def main():
         print(f"Expected files in: {DOC_OUTPUT}")
         return 1
 
-    content = generate_claude_md(plc_data, hmi_data)
+    content = generate_claude_md(plc_data, hmi_data, hmi_path or "")
 
     os.makedirs(DOC_OUTPUT, exist_ok=True)
     output_path = os.path.join(DOC_OUTPUT, "CLAUDE.md")

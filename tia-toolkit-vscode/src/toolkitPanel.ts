@@ -14,6 +14,7 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
     private readonly runner = new CommandRunner();
     private config: ToolkitConfig;
     private tiaVersion = 'V21+';
+    private reportViewMode = 'md';
     private resolved = false;
     private disposables: vscode.Disposable[] = [];
 
@@ -117,7 +118,11 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
                 this.refreshReports();
                 break;
             case 'loadReport':
-                this.loadReport(msg.name);
+                this.loadReport(msg.name, msg.fullPath);
+                break;
+            case 'setReportViewMode':
+                this.reportViewMode = msg.mode;
+                this.refreshReports();
                 break;
             case 'openInEditor':
                 this.openInEditor(msg.name);
@@ -296,9 +301,9 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
     // ── Report viewer ───────────────────────────────────────────────────
 
     private refreshReports(): void {
-        const reports = scanReports(this.config.docOutput);
+        const reports = scanReports(this.config.docOutput, this.reportViewMode);
         const wsReports = this.config.autoSync
-            ? scanReports(this.config.workspaceDocOutput)
+            ? scanReports(this.config.workspaceDocOutput, this.reportViewMode)
             : [];
 
         const files = wsReports.length > 0 ? wsReports : reports;
@@ -308,8 +313,22 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    private loadReport(name: string): void {
+    private loadReport(name: string, fullPath?: string): void {
         if (!name) { return; }
+
+        // If fullPath provided directly, use it (avoids path resolution issues)
+        if (fullPath && fs.existsSync(fullPath)) {
+            try {
+                const content = fs.readFileSync(fullPath, 'utf-8');
+                this.postMessage({ type: 'reportContent', content });
+                const lines = content.split('\n').length;
+                this.consoleLog(`Loaded ${name} (${lines} lines)`);
+                return;
+            } catch (err: any) {
+                this.consoleLog(`Error reading ${name}: ${err.message}`);
+                return;
+            }
+        }
 
         const locations = [
             this.config.workspaceDocOutput,

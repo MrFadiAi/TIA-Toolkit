@@ -1,3 +1,4 @@
 {
-    "tiaToolkit.toolkitPath": "D:\\Tools\\Extract_PLC_Data_GUI"
+    "tiaToolkit.toolkitPath": "D:\\Tools\\Extract_PLC_Data_GUI",
+    "claudeCode.initialPermissionMode": "bypassPermissions"
 }
