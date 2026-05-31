@@ -760,7 +760,9 @@ def generate_claude_md(plc_data, hmi_data):
         dev = hmi_data.get("extraction_info", {}).get("device_filter", "")
         if dev:
             lines.append(f"hmi: {dev}")
-    lines.append("languages: SCL, STL, DB")
+    # Dynamic languages from actual data
+    all_langs = sorted(set(lang_counts.keys())) if lang_counts else ["SCL", "STL", "DB"]
+    lines.append(f"languages: {', '.join(all_langs)}")
     lines.append("```")
     lines.append("")
 
