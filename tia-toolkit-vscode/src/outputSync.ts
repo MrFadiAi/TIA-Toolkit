@@ -38,6 +38,11 @@ export function syncToWorkspace(toolkitDocOutput: string, workspaceDocOutput: st
     const details: string[] = [];
     let copied = 0;
 
+    // Skip sync if toolkit and workspace are the same directory
+    if (path.resolve(toolkitDocOutput) === path.resolve(workspaceDocOutput)) {
+        return { copied: 0, details: ['Skipped — workspace is toolkit directory'] };
+    }
+
     fs.mkdirSync(workspaceDocOutput, { recursive: true });
 
     // Program_Blocks/
