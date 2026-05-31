@@ -757,12 +757,232 @@ def _clean_idb_name(name):
 
 
 # ---------------------------------------------------------------------------
+# New section helpers
+# ---------------------------------------------------------------------------
+
+def build_quick_facts(plc_data, hmi_data, blocks):
+    """Build compact Quick Facts section — adapts to available data."""
+    lines = []
+    project_name = get_project_name(plc_data, hmi_data)
+    plc_name = get_plc_name(plc_data)
+
+    lines.append(f"- **Project:** {project_name}")
+
+    # PLC info
+    if plc_data and blocks:
+        summary = plc_data.get("summary", {})
+        tags_c = summary.get("plc_tags_loaded", 0)
+        lines.append(f"- **PLC:** {plc_name} ({summary.get('total_blocks', 0)} blocks, {tags_c} tags)")
+        main_ob = _find_main_ob(blocks)
+        if main_ob:
+            lines.append(f"- **Main OB:** OB{main_ob.get('block_number', '?')}_{main_ob.get('block_name', '?')}")
+        lang_counts = count_blocks_by_language(blocks)
+        exec_langs = {k: v for k, v in lang_counts.items() if k not in ("DB", "STRUCT")}
+        primary = max(exec_langs, key=exec_langs.get) if exec_langs else "SCL"
+        lines.append(f"- **Language:** {primary} primary ({', '.join(f'{v} {k}' for k, v in sorted(exec_langs.items()))})")
+        subsystems = build_subsystem_overview(blocks)
+        if len(subsystems) > 1:
+            top_subs = list(subsystems.keys())[:5]
+            lines.append(f"- **Subsystems:** {', '.join(top_subs)}")
+        safety = detect_safety_blocks(blocks)
+        if safety:
+            lines.append(f"- **Safety blocks:** {len(safety)} detected (see Safety-Critical Blocks)")
+    else:
+        lines.append("- **PLC:** ⚠ Not extracted — run PLC pipeline first")
+
+    # HMI info
+    if hmi_data:
+        screens = hmi_data.get("screens", [])
+        total_elements = sum(len(s.get("elements", [])) for s in screens)
+        hmi_dev = hmi_data.get("extraction_info", {}).get("device_filter", "")
+        lines.append(f"- **HMI:** {hmi_dev} ({len(screens)} screens, {total_elements} elements)" if hmi_dev
+                     else f"- **HMI:** {len(screens)} screens, {total_elements} elements")
+
+    # Start-here guidance
+    if plc_data and blocks:
+        lines.append(f"- **Start here:** Read the DB Purpose Table, then Execution Order, then HMI Tag Bridge")
+    elif hmi_data:
+        lines.append(f"- **Start here:** Read HMI Screens Overview and Navigation Map, then extract PLC data")
+    return lines
+
+
+def build_hmi_screen_table(hmi_data):
+    """Build compact HMI screen summary table."""
+    if not hmi_data:
+        return []
+
+    screens = hmi_data.get("screens", [])
+    if not screens:
+        return []
+
+    lines = []
+    lines.append("| Screen | Elements | Tags | Events | Key Types |")
+    lines.append("|--------|----------|------|--------|-----------|")
+
+    for scr in sorted(screens, key=lambda s: s.get("screen_name", "")):
+        name = scr.get("screen_name", "?")
+        elements = scr.get("elements", [])
+
+        # Count by element type
+        type_counts = Counter(e.get("type", "?") for e in elements)
+        tag_count = sum(len(e.get("tag_bindings", [])) for e in elements)
+        event_count = sum(len(e.get("events", [])) for e in elements)
+
+        # Show top 3 element types
+        top_types = type_counts.most_common(3)
+        type_str = ", ".join(f"{c}x {t}" for t, c in top_types)
+
+        lines.append(f"| {name} | {len(elements)} | {tag_count} | {event_count} | {type_str} |")
+
+    return lines
+
+
+def build_hmi_navigation_map(hmi_data):
+    """Build HMI screen navigation map from navigation_map or per-screen navigations."""
+    if not hmi_data:
+        return []
+
+    # Prefer top-level navigation_map (from merged data)
+    nav_map = hmi_data.get("navigation_map", {})
+    if not nav_map:
+        # Build from per-screen screen_navigations
+        nav_map = {}
+        for scr in hmi_data.get("screens", []):
+            navs = scr.get("screen_navigations", [])
+            if navs:
+                nav_map[scr.get("screen_name", "?")] = navs
+
+    if not nav_map:
+        return []
+
+    lines = []
+    for source, targets in sorted(nav_map.items()):
+        target_str = ", ".join(targets) if isinstance(targets, list) else str(targets)
+        lines.append(f"- **{source}** → {target_str}")
+
+    return lines
+
+
+def build_compact_hmi_bridge(hmi_data):
+    """Build compact HMI-PLC tag bridge table with type summaries and DB references."""
+    if not hmi_data:
+        return []
+
+    screens = hmi_data.get("screens", [])
+    if not screens:
+        return []
+
+    lines = []
+    lines.append("| Screen | Tags | Data Types | Key DB References |")
+    lines.append("|--------|------|------------|-------------------|")
+
+    screen_stats = []
+    for scr in screens:
+        name = scr.get("screen_name", "?")
+        elements = scr.get("elements", [])
+
+        # Collect all tag_bindings
+        all_bindings = []
+        for elem in elements:
+            all_bindings.extend(elem.get("tag_bindings", []))
+
+        if not all_bindings:
+            screen_stats.append((name, 0, {}, set()))
+            continue
+
+        # Group by data_type
+        dtype_counts = Counter()
+        db_refs = set()
+        for b in all_bindings:
+            if isinstance(b, dict):
+                dt = b.get("data_type", "?")
+                if dt:
+                    dtype_counts[dt] += 1
+                plc_tag = b.get("plc_tag", "")
+                if plc_tag and "." in plc_tag:
+                    db_refs.add(plc_tag.split(".")[0])
+                elif plc_tag:
+                    db_refs.add(plc_tag)
+
+        screen_stats.append((name, len(all_bindings), dtype_counts, db_refs))
+
+    # Sort by tag count descending, show top 15
+    screen_stats.sort(key=lambda x: x[1], reverse=True)
+    for name, tag_count, dtype_counts, db_refs in screen_stats[:15]:
+        if tag_count == 0:
+            continue
+        dt_str = ", ".join(f"{c}x {dt}" for dt, c in dtype_counts.most_common(4))
+        db_str = ", ".join(sorted(db_refs)[:4])
+        if len(db_refs) > 4:
+            db_str += f" (+{len(db_refs)-4})"
+        lines.append(f"| {name} | {tag_count} | {dt_str} | {db_str or '—'} |")
+
+    if len(screen_stats) > 15:
+        remaining = sum(1 for _, tc, _, _ in screen_stats[15:] if tc > 0)
+        if remaining:
+            lines.append(f"| *(+{remaining} more screens)* | | | |")
+
+    return lines
+
+
+def build_data_sources_report(plc_data, hmi_data, plc_path, hmi_path):
+    """Build extraction quality report showing available data sources."""
+    lines = []
+    lines.append("| Source | Status | Records |")
+    lines.append("|--------|--------|---------|")
+
+    # PLC cache
+    if plc_data:
+        summary = plc_data.get("summary", {})
+        total = summary.get("total_blocks", 0)
+        tags = summary.get("plc_tags_loaded", 0)
+        lines.append(f"| PLC blocks ({os.path.basename(plc_path or '')}) | ✓ | {total} blocks |")
+        lines.append(f"| PLC tags | {'✓' if tags > 0 else '⚠'} | {tags} tags |")
+    else:
+        lines.append("| PLC blocks (.plc_cache.json) | ✗ | Not found — run PLC pipeline |")
+
+    # HMI data
+    if hmi_data:
+        screens = hmi_data.get("screens", [])
+        hmi_name = os.path.basename(hmi_path or "HMI data")
+        elements = sum(len(s.get("elements", [])) for s in screens)
+        lines.append(f"| HMI data ({hmi_name}) | ✓ | {len(screens)} screens, {elements} elements |")
+    else:
+        lines.append("| HMI data | ✗ | Not found |")
+
+    # Check individual files
+    for filename, label in [
+        (".hmi_merged.json", "HMI merged"),
+        (".hmi_online_data.json", "HMI online (C#)"),
+        ("hmi_offline_data.json", "HMI offline (Python)"),
+    ]:
+        filepath = os.path.join(DOC_OUTPUT, filename)
+        if os.path.exists(filepath):
+            try:
+                data = load_json(filepath)
+                count = len(data.get("screens", [])) if data else 0
+                lines.append(f"| {label} | ✓ | {count} screens |")
+            except Exception:
+                lines.append(f"| {label} | ✓ | Found |")
+        else:
+            lines.append(f"| {label} | ✗ | Not found |")
+
+    return lines
+
+
+# ---------------------------------------------------------------------------
 # CLAUDE.md generation
 # ---------------------------------------------------------------------------
 
 def generate_claude_md(plc_data, hmi_data, hmi_path=""):
     """Assemble comprehensive CLAUDE.md with front-loaded critical info."""
-    lines = []
+    sections = []  # (title, lines) pairs for TOC generation
+
+    def add_section(title, sec_lines):
+        """Register a section for the document and TOC."""
+        content_lines = [l for l in sec_lines if l.strip() and l.strip() != "## " + title]
+        if content_lines:
+            sections.append((title, sec_lines))
 
     project_name = get_project_name(plc_data, hmi_data)
     plc_name = get_plc_name(plc_data)
@@ -781,24 +1001,23 @@ def generate_claude_md(plc_data, hmi_data, hmi_path=""):
     hmi_screens_count = len(hmi_data.get("screens", [])) if hmi_data else 0
 
     # ===== 1. Header + Stats =====
-    lines.append(f"# CLAUDE.md — {project_name}")
-    lines.append("")
-    lines.append("```yaml")
-    lines.append("role: PLC/HMI Automation Engineer")
-    lines.append("software: Siemens TIA Portal")
+    header_lines = []
+    header_lines.append(f"# CLAUDE.md — {project_name}")
+    header_lines.append("")
+    header_lines.append("```yaml")
+    header_lines.append("role: PLC/HMI Automation Engineer")
+    header_lines.append("software: Siemens TIA Portal")
     if plc_name:
-        lines.append(f"plc: {plc_name}")
+        header_lines.append(f"plc: {plc_name}")
     if hmi_data:
         dev = hmi_data.get("extraction_info", {}).get("device_filter", "")
         if dev:
-            lines.append(f"hmi: {dev}")
-    # Dynamic languages from actual data
+            header_lines.append(f"hmi: {dev}")
     all_langs = sorted(set(lang_counts.keys())) if lang_counts else ["SCL", "STL", "DB"]
-    lines.append(f"languages: {', '.join(all_langs)}")
-    lines.append("```")
-    lines.append("")
+    header_lines.append(f"languages: {', '.join(all_langs)}")
+    header_lines.append("```")
+    header_lines.append("")
 
-    # One-line stats
     total = summary.get("total_blocks", 0)
     fb_c = summary.get("fb_count", 0)
     fc_c = summary.get("fc_count", 0)
@@ -814,49 +1033,63 @@ def generate_claude_md(plc_data, hmi_data, hmi_path=""):
     if stl_c: lang_parts.append(f"{stl_c} STL")
     if lad_c: lang_parts.append(f"{lad_c} LAD")
     lang_str = " / ".join(lang_parts)
-    lines.append(f"**{total} blocks** ({fb_c} FB, {fc_c} FC, {ob_c} OB, {db_c} DB, {idb_c} IDB) · **{tags_c} PLC tags** · **{hmi_screens_count} HMI screens** · {lang_str}")
-    lines.append("")
+    header_lines.append(f"**{total} blocks** ({fb_c} FB, {fc_c} FC, {ob_c} OB, {db_c} DB, {idb_c} IDB) · **{tags_c} PLC tags** · **{hmi_screens_count} HMI screens** · {lang_str}")
+    header_lines.append("")
 
-    # ===== 2. Rules for AI =====
-    lines.append("## Rules for AI")
-    lines.append("")
-    lines.append("### Safety")
-    lines.append("- NEVER change addresses of existing I/O tags without verification")
-    lines.append("- Preserve existing program structure — do not reorganize blocks without approval")
-    lines.append("- Always verify tag addresses match actual hardware configuration")
-    lines.append("- Never modify safety-critical blocks without explicit approval (see Safety-Critical Blocks)")
-    lines.append("")
-    lines.append("### Code Style")
+    # ===== 2. Missing Data Warning =====
+    if not plc_data or not blocks:
+        header_lines.append("> ⚠ **PLC data not extracted yet.** Most sections below will be empty.")
+        header_lines.append("> Run the PLC pipeline to get full analysis:")
+        header_lines.append(">   1. Export blocks: `tia_export_blocks.exe \"Doc_OUTPUT/DATA_Program blocks\" \"DEVICE_NAME\"`")
+        header_lines.append(">   2. Parse: `python src/extract_plc_full.py \"Doc_OUTPUT/DATA_Program blocks\" --verbose`")
+        header_lines.append(">   3. Report: `python src/plc_report.py`")
+        header_lines.append(">   4. Regenerate: `python src/generate_claudemd.py`")
+        header_lines.append("")
+
+    # ===== 3. Quick Facts =====
+    qf_lines = ["## Quick Facts", ""]
+    qf_lines.extend(build_quick_facts(plc_data, hmi_data, blocks))
+    qf_lines.append("")
+    add_section("Quick Facts", qf_lines)
+
+    # ===== 4. Rules for AI =====
+    rules_lines = ["## Rules for AI", ""]
+    rules_lines.append("### Safety")
+    rules_lines.append("- NEVER change addresses of existing I/O tags without verification")
+    rules_lines.append("- Preserve existing program structure — do not reorganize blocks without approval")
+    rules_lines.append("- Always verify tag addresses match actual hardware configuration")
+    rules_lines.append("- Never modify safety-critical blocks without explicit approval (see Safety-Critical Blocks)")
+    rules_lines.append("")
+    rules_lines.append("### Code Style")
     comment_lang = _detect_comment_language(blocks) if blocks else "English"
     lang_note = f"Comments in {comment_lang}" if comment_lang != "English" else "Comments in project language"
-    lines.append(f"- Primary language: **{primary_lang}** — Prefer {primary_lang} for new blocks (match project conventions)")
-    lines.append("- Use meaningful variable names matching existing conventions")
-    lines.append(f"- {lang_note}, UPPER_SNAKE_CASE for all tags and blocks")
-    lines.append("- Use symbolic names, never absolute addresses (`\"Tag_Name\"` not `%I0.0`)")
-    lines.append("- Keep interfaces minimal — only expose what's needed")
-    lines.append("- Mark changes with `// CHANGED:` or `// ADDED:` comments")
-    lines.append("")
-    lines.append("### Testing")
-    lines.append("- Verify changes in simulation before downloading to PLC")
-    lines.append("- Check cross-references before renaming or moving blocks")
-    lines.append("- Validate HMI tag bindings still work after PLC changes")
-    lines.append("")
+    rules_lines.append(f"- Primary language: **{primary_lang}** — Prefer {primary_lang} for new blocks (match project conventions)")
+    rules_lines.append("- Use meaningful variable names matching existing conventions")
+    rules_lines.append(f"- {lang_note}, UPPER_SNAKE_CASE for all tags and blocks")
+    rules_lines.append("- Use symbolic names, never absolute addresses (`\"Tag_Name\"` not `%I0.0`)")
+    rules_lines.append("- Keep interfaces minimal — only expose what is needed")
+    rules_lines.append("- Mark changes with `// CHANGED:` or `// ADDED:` comments")
+    rules_lines.append("")
+    rules_lines.append("### Testing")
+    rules_lines.append("- Verify changes in simulation before downloading to PLC")
+    rules_lines.append("- Check cross-references before renaming or moving blocks")
+    rules_lines.append("- Validate HMI tag bindings still work after PLC changes")
+    rules_lines.append("")
+    add_section("Rules for AI", rules_lines)
 
-    # ===== 3. How to Help Me =====
-    lines.append("## How to Help Me")
-    lines.append("")
-    lines.append("### Block Report Format")
-    lines.append("Each `.md` file in `Program_Blocks/` contains: block header (type, number, language, folder),")
-    lines.append("full interface (inputs/outputs/inouts/statics/temps with types and start values),")
-    lines.append("per-network code with titles/comments, call list, tag cross-references, and source file path.")
-    lines.append("Read these first before suggesting any code changes.")
-    lines.append("")
+    # ===== 5. How to Help Me =====
+    help_lines = ["## How to Help Me", ""]
+    help_lines.append("### Block Report Format")
+    help_lines.append("Each `.md` file in `Program_Blocks/` contains: block header (type, number, language, folder),")
+    help_lines.append("full interface (inputs/outputs/inouts/statics/temps with types and start values),")
+    help_lines.append("per-network code with titles/comments, call list, tag cross-references, and source file path.")
+    help_lines.append("Read these first before suggesting any code changes.")
+    help_lines.append("")
 
-    lines.append("### Tracing Tags")
-    lines.append("1. Start from the tag name — read the block's `.md` file in `Program_Blocks/`")
-    lines.append("2. Use Tag Cross-References — check \"Tag References\" in block reports")
-    lines.append("3. Check HMI bindings — look in `hmi_screens/` reports")
-    # Dynamic example tag from actual data
+    help_lines.append("### Tracing Tags")
+    help_lines.append("1. Start from the tag name — read the block's `.md` file in `Program_Blocks/`")
+    help_lines.append("2. Use Tag Cross-References — check \"Tag References\" in block reports")
+    help_lines.append("3. Check HMI bindings — look in `hmi_screens/` reports")
     example_tag = ""
     if plc_data and tag_xref:
         for tag_name in sorted(tag_xref.keys()):
@@ -864,26 +1097,26 @@ def generate_claude_md(plc_data, hmi_data, hmi_path=""):
                 example_tag = tag_name
                 break
     example_hint = f" — for `{example_tag}`, read the DB interface" if example_tag else ""
-    lines.append(f"4. Trace full path{example_hint}")
-    lines.append("")
+    help_lines.append(f"4. Trace full path{example_hint}")
+    help_lines.append("")
 
-    lines.append("### Modifying SCL/STL Code")
-    lines.append("1. Read the block's `.md` first — has full code, interface, calls, tag refs")
-    lines.append("2. Show exact code change — complete modified section, not just description")
-    lines.append("3. Preserve structure — keep REGION/END_REGION blocks, network comments, indentation")
-    lines.append("4. Verify interface — if adding parameters, update all call sites")
-    lines.append("")
+    help_lines.append("### Modifying SCL/STL Code")
+    help_lines.append("1. Read the block's `.md` first — has full code, interface, calls, tag refs")
+    help_lines.append("2. Show exact code change — complete modified section, not just description")
+    help_lines.append("3. Preserve structure — keep REGION/END_REGION blocks, network comments, indentation")
+    help_lines.append("4. Verify interface — if adding parameters, update all call sites")
+    help_lines.append("")
 
-    lines.append("### Analyzing Call Chains")
+    help_lines.append("### Analyzing Call Chains")
     main_ob = _find_main_ob(blocks) if blocks else None
     ob_ref = f"OB{main_ob['block_number']}" if main_ob else "main cyclic OB"
-    lines.append(f"1. Start from {ob_ref} Main (see Execution Order below)")
-    lines.append("2. Follow calls downward via each block's \"Calls\" section")
-    lines.append("3. Check data dependencies via Data Flow Map")
-    lines.append("4. Use Instance DB Mapping for FB instance data blocks")
-    lines.append("")
+    help_lines.append(f"1. Start from {ob_ref} Main (see Execution Order below)")
+    help_lines.append("2. Follow calls downward via each block's \"Calls\" section")
+    help_lines.append("3. Check data dependencies via Data Flow Map")
+    help_lines.append("4. Use Instance DB Mapping for FB instance data blocks")
+    help_lines.append("")
 
-    # Dynamic: Working with Alarms & Safety (auto-detected blocks)
+    # Dynamic: Working with Alarms & Safety
     if plc_data:
         safety_blocks_list = detect_safety_blocks(blocks)
         alarm_fcs = [s for s in safety_blocks_list if s["type"] == "FC" and "ALARM" in ";".join(s["reasons"]).upper()]
@@ -891,35 +1124,35 @@ def generate_claude_md(plc_data, hmi_data, hmi_path=""):
         guard_blocks = [s for s in safety_blocks_list if "GUARD" in ";".join(s["reasons"]).upper() or "BEWAKING" in ";".join(s["reasons"]).upper()]
         safety_other = [s for s in safety_blocks_list if s not in alarm_fcs and s not in alarm_fbs and s not in guard_blocks]
 
-        lines.append("### Working with Alarms & Safety")
+        help_lines.append("### Working with Alarms & Safety")
         if alarm_fcs:
             fc_names = ", ".join(f"`{s['label']}`" for s in alarm_fcs[:3])
-            lines.append(f"- Alarm FCs: {fc_names} — coordinate alarm collection and handling")
+            help_lines.append(f"- Alarm FCs: {fc_names} — coordinate alarm collection and handling")
         if alarm_fbs:
             fb_names = ", ".join(f"`{s['label']}`" for s in alarm_fbs[:3])
-            lines.append(f"- Alarm FBs: {fb_names} — process alarm instances per subsystem")
+            help_lines.append(f"- Alarm FBs: {fb_names} — process alarm instances per subsystem")
         if guard_blocks:
             guard_names = ", ".join(f"`{s['label']}`" for s in guard_blocks[:3])
-            lines.append(f"- Guard/monitor blocks: {guard_names} — changes affect machine safety")
+            help_lines.append(f"- Guard/monitor blocks: {guard_names} — changes affect machine safety")
         if not alarm_fcs and not alarm_fbs and not guard_blocks and safety_other:
             for s in safety_other[:3]:
                 reasons = "; ".join(s["reasons"][:2])
-                lines.append(f"- `{s['label']}` — {reasons}")
+                help_lines.append(f"- `{s['label']}` — {reasons}")
         if not safety_blocks_list:
-            lines.append("- Check Safety-Critical Blocks section below for flagged blocks")
-        lines.append("")
+            help_lines.append("- Check Safety-Critical Blocks section below for flagged blocks")
+        help_lines.append("")
 
-    lines.append("### HMI Changes")
-    lines.append("- Check tag bindings first via HMI <-> PLC Tag Bridge below")
-    lines.append("- Verify PLC tag exists before adding HMI binding")
-    lines.append("- Show affected screens when changing a PLC tag")
-    lines.append("")
-    lines.append("### Step Sequencers")
-    lines.append("- Read the step DB first — step sequencers use dedicated DBs")
-    lines.append("- Show full step transition: entry condition + actions + transition")
-    lines.append("")
+    help_lines.append("### HMI Changes")
+    help_lines.append("- Check tag bindings first via HMI <-> PLC Tag Bridge below")
+    help_lines.append("- Verify PLC tag exists before adding HMI binding")
+    help_lines.append("- Show affected screens when changing a PLC tag")
+    help_lines.append("")
+    help_lines.append("### Step Sequencers")
+    help_lines.append("- Read the step DB first — step sequencers use dedicated DBs")
+    help_lines.append("- Show full step transition: entry condition + actions + transition")
+    help_lines.append("")
 
-    # Dynamic: Communication (auto-detected)
+    # Dynamic: Communication
     if plc_data:
         comm_blocks = []
         for b in blocks:
@@ -932,46 +1165,61 @@ def generate_claude_md(plc_data, hmi_data, hmi_path=""):
                 comm_blocks.append(f"`{btype}{bnum}_{b.get('block_name', '?')}`" if bnum else f"`{b.get('block_name', '?')}`")
 
         if comm_blocks:
-            lines.append("### Communication")
+            help_lines.append("### Communication")
             for cb in comm_blocks[:6]:
-                lines.append(f"- {cb}")
+                help_lines.append(f"- {cb}")
             if len(comm_blocks) > 6:
-                lines.append(f"- (+{len(comm_blocks)-6} more communication blocks)")
-            lines.append("")
-    lines.append("")
+                help_lines.append(f"- (+{len(comm_blocks)-6} more communication blocks)")
+            help_lines.append("")
+    help_lines.append("")
+    add_section("How to Help Me", help_lines)
 
-    # ===== 4. I/O Hardware Summary =====
+    # ===== 6. HMI Screens Overview =====
+    hmi_table_lines = build_hmi_screen_table(hmi_data)
+    if hmi_table_lines:
+        sec = ["## HMI Screens Overview", ""]
+        sec.extend(hmi_table_lines)
+        sec.append("")
+        add_section("HMI Screens Overview", sec)
+
+    # ===== 7. HMI Navigation Map =====
+    nav_lines = build_hmi_navigation_map(hmi_data)
+    if nav_lines:
+        sec = ["## HMI Navigation Map", ""]
+        sec.extend(nav_lines)
+        sec.append("")
+        add_section("HMI Navigation Map", sec)
+
+    # ===== 8. I/O Hardware Summary =====
     if plc_data and plc_tags:
         io_summary = build_io_summary(plc_tags)
         if io_summary:
-            lines.append("## I/O Hardware Summary")
-            lines.append("")
-            lines.append("| Area | Count | Byte Range | Data Types |")
-            lines.append("|------|-------|------------|------------|")
+            sec = ["## I/O Hardware Summary", ""]
+            sec.append("| Area | Count | Byte Range | Data Types |")
+            sec.append("|------|-------|------------|------------|")
             for key in ("inputs", "outputs", "memory"):
                 if key not in io_summary:
                     continue
                 area = io_summary[key]
                 dtypes_str = ", ".join(f"{dt}" for dt in list(area["dtypes"].keys())[:4])
-                lines.append(f"| {area['label']} | {area['count']} | {area['bytes']} | {dtypes_str} |")
-            lines.append("")
+                sec.append(f"| {area['label']} | {area['count']} | {area['bytes']} | {dtypes_str} |")
+            sec.append("")
+            add_section("I/O Hardware Summary", sec)
 
-    # ===== 5. DB Purpose Table =====
-    udt_blocks = []
+    # ===== 9. DB Purpose Table =====
     if plc_data:
         db_blocks = [b for b in blocks if b.get("block_type") == "DB"]
         if db_blocks:
-            lines.append("## Quick Reference: DB Purpose Table")
-            lines.append("")
-            lines.append("| DB | Type | Purpose | Folder |")
-            lines.append("|----|------|---------|--------|")
+            sec = ["## Quick Reference: DB Purpose Table", ""]
+            sec.append("| DB | Type | Purpose | Folder |")
+            sec.append("|----|------|---------|--------|")
             for b in sorted(db_blocks, key=lambda x: x.get("block_number", 0)):
                 bnum = b.get("block_number", "")
                 bname = b.get("block_name", "?")
                 purpose = infer_db_purpose(b)
                 folder = _short_folder(b.get("folder", ""))
-                lines.append(f"| DB{bnum}_{bname} | DB | {purpose} | {folder} |")
-            lines.append("")
+                sec.append(f"| DB{bnum}_{bname} | DB | {purpose} | {folder} |")
+            sec.append("")
 
             # Instance DB groupings
             idb_blocks = [b for b in blocks if b.get("block_type") == "IDB"]
@@ -981,10 +1229,10 @@ def generate_claude_md(plc_data, hmi_data, hmi_path=""):
                     fb_name = b.get("instance_of_name", "Unknown")
                     fb_groups[fb_name].append(b)
 
-                lines.append("### Instance DBs — key groupings")
-                lines.append("")
-                lines.append("| FB | Instance DBs | Count | Purpose |")
-                lines.append("|----|-------------|-------|---------|")
+                sec.append("### Instance DBs — key groupings")
+                sec.append("")
+                sec.append("| FB | Instance DBs | Count | Purpose |")
+                sec.append("|----|-------------|-------|---------|")
                 for fb_name in sorted(fb_groups.keys()):
                     grp = fb_groups[fb_name]
                     count = len(grp)
@@ -995,19 +1243,19 @@ def generate_claude_md(plc_data, hmi_data, hmi_path=""):
                     if count > 5:
                         idb_names += f" +{count-5} more"
                     purpose = _infer_fb_purpose(fb_name)
-                    lines.append(f"| {fb_name} | {idb_names} | {count} | {purpose} |")
-                lines.append("")
+                    sec.append(f"| {fb_name} | {idb_names} | {count} | {purpose} |")
+                sec.append("")
+            add_section("Quick Reference: DB Purpose Table", sec)
 
-    # ===== 6. Execution Order =====
+    # ===== 10. Execution Order =====
     if plc_data:
         exec_order = build_execution_order(plc_data)
         if exec_order:
             main_ob = _find_main_ob(blocks)
             ob_label = f"OB{main_ob['block_number']}" if main_ob else "Main OB"
-            lines.append(f"## Execution Order ({ob_label} Main)")
-            lines.append("")
-            lines.append(f"{ob_label} cyclic call sequence (PLC scan order):")
-            lines.append("")
+            sec = [f"## Execution Order ({ob_label} Main)", ""]
+            sec.append(f"{ob_label} cyclic call sequence (PLC scan order):")
+            sec.append("")
             for i, call in enumerate(exec_order, 1):
                 sub_calls = call_tree.get(call, [])
                 line = f"{i}. `{call}`"
@@ -1015,60 +1263,61 @@ def generate_claude_md(plc_data, hmi_data, hmi_path=""):
                     line += " -> " + ", ".join(f"`{c}`" for c in sub_calls[:5])
                     if len(sub_calls) > 5:
                         line += f" (+{len(sub_calls)-5})"
-                lines.append(line)
-            lines.append("")
+                sec.append(line)
+            sec.append("")
+            add_section(f"Execution Order ({ob_label} Main)", sec)
 
-    # ===== 7. Organization Blocks =====
+    # ===== 11. Organization Blocks =====
     if plc_data:
         all_obs = build_ob_summary(blocks)
         if len(all_obs) > 1:
-            lines.append("## Organization Blocks")
-            lines.append("")
-            lines.append("| OB | Language | Purpose | Calls |")
-            lines.append("|----|----------|---------|-------|")
+            sec = ["## Organization Blocks", ""]
+            sec.append("| OB | Language | Purpose | Calls |")
+            sec.append("|----|----------|---------|-------|")
             for ob in all_obs:
                 bnum = ob["number"]
                 purpose = ob["comment"] or ob["name"]
                 calls_str = ", ".join(ob["calls"][:5]) if ob["calls"] else "—"
                 if len(ob["calls"]) > 5:
                     calls_str += f" (+{len(ob['calls'])-5})"
-                lines.append(f"| OB{bnum} | {ob['language']} | {purpose} | {calls_str} |")
-            lines.append("")
+                sec.append(f"| OB{bnum} | {ob['language']} | {purpose} | {calls_str} |")
+            sec.append("")
+            add_section("Organization Blocks", sec)
 
-    # ===== 8. Data Flow Map =====
+    # ===== 12. Data Flow Map =====
     if plc_data:
         data_flow = build_data_flow(plc_data)
         if data_flow:
-            lines.append("## Data Flow Map")
-            lines.append("")
-            lines.append("Which executable blocks reference which DBs (data dependencies):")
-            lines.append("")
-            lines.append("| Block | DBs Referenced |")
-            lines.append("|-------|---------------|")
+            sec = ["## Data Flow Map", ""]
+            sec.append("Which executable blocks reference which DBs (data dependencies):")
+            sec.append("")
+            sec.append("| Block | DBs Referenced |")
+            sec.append("|-------|---------------|")
             for bname, dbs in sorted(data_flow.items()):
                 dbs_str = ", ".join(dbs[:8])
                 if len(dbs) > 8:
                     dbs_str += f" (+{len(dbs)-8})"
-                lines.append(f"| {bname} | {dbs_str} |")
-            lines.append("")
+                sec.append(f"| {bname} | {dbs_str} |")
+            sec.append("")
 
-            # ===== 9. Reverse Data Flow (DB -> Consumers) =====
+            # Reverse Data Flow
             reverse_flow = build_reverse_data_flow(data_flow)
             if reverse_flow:
-                lines.append("### Reverse Data Flow (DB -> Consumers)")
-                lines.append("")
-                lines.append("Which blocks consume each DB (modification impact):")
-                lines.append("")
-                lines.append("| DB | Referenced By |")
-                lines.append("|----|--------------|")
+                sec.append("### Reverse Data Flow (DB -> Consumers)")
+                sec.append("")
+                sec.append("Which blocks consume each DB (modification impact):")
+                sec.append("")
+                sec.append("| DB | Referenced By |")
+                sec.append("|----|--------------|")
                 for db_name, consumers in sorted(reverse_flow.items()):
                     c_str = ", ".join(consumers[:6])
                     if len(consumers) > 6:
                         c_str += f" (+{len(consumers)-6})"
-                    lines.append(f"| {db_name} | {c_str} |")
-                lines.append("")
+                    sec.append(f"| {db_name} | {c_str} |")
+                sec.append("")
+            add_section("Data Flow Map", sec)
 
-    # ===== 10. Instance DB Mapping =====
+    # ===== 13. Instance DB Mapping =====
     if plc_data:
         instance_map = build_instance_db_map(blocks)
         if instance_map:
@@ -1076,30 +1325,31 @@ def generate_claude_md(plc_data, hmi_data, hmi_path=""):
             for m in instance_map:
                 fb_idbs[m["fb_name"]].append(m)
 
-            lines.append("## Instance DB Mapping")
-            lines.append("")
-            lines.append("| FB | Instance DB | Folder |")
-            lines.append("|----|-------------|--------|")
+            sec = ["## Instance DB Mapping", ""]
+            sec.append("| FB | Instance DB | Folder |")
+            sec.append("|----|-------------|--------|")
             for fb_name in sorted(fb_idbs.keys()):
                 grp = fb_idbs[fb_name]
                 for m in sorted(grp, key=lambda x: x.get("folder", "")):
-                    lines.append(f"| {fb_name} | {m['idb_name']} | {m['folder']} |")
-            lines.append("")
+                    sec.append(f"| {fb_name} | {m['idb_name']} | {m['folder']} |")
+            sec.append("")
+            add_section("Instance DB Mapping", sec)
 
-    # ===== 11. Safety-Critical Blocks =====
+    # ===== 14. Safety-Critical Blocks =====
     if plc_data:
         safety_blocks = detect_safety_blocks(blocks)
         if safety_blocks:
-            lines.append("## Safety-Critical Blocks")
-            lines.append("")
-            lines.append("| Block | Type | Reason |")
-            lines.append("|-------|------|--------|")
+            sec = ["## Safety-Critical Blocks", ""]
+            sec.append("| Block | Type | Reason |")
+            sec.append("|-------|------|--------|")
             for s in safety_blocks:
                 reasons_str = "; ".join(s["reasons"][:2])
-                lines.append(f"| {s['label']} | {s['type']} | {reasons_str} |")
-            lines.append("")
+                sec.append(f"| {s['label']} | {s['type']} | {reasons_str} |")
+            sec.append("")
+            add_section("Safety-Critical Blocks", sec)
 
-    # ===== 12. Key Tags & HMI Bridge =====
+    # ===== 15. Key Tags & Compact HMI Tag Bridge =====
+    tags_bridge_added = False
     if plc_data and tag_xref:
         def _xref_count(item):
             val = item[1]
@@ -1108,12 +1358,11 @@ def generate_claude_md(plc_data, hmi_data, hmi_path=""):
             return len(val)
         top_tags = sorted(tag_xref.items(), key=_xref_count, reverse=True)[:10]
         if top_tags:
-            lines.append("## Key Tags & HMI Bridge")
-            lines.append("")
-            lines.append("### Most Referenced Tags")
-            lines.append("")
-            lines.append("| Tag | Used In |")
-            lines.append("|-----|---------|")
+            sec = ["## Key Tags & HMI Bridge", ""]
+            sec.append("### Most Referenced Tags")
+            sec.append("")
+            sec.append("| Tag | Used In |")
+            sec.append("|-----|---------|")
             for tag, refs in top_tags:
                 if isinstance(refs, dict):
                     block_list = refs.get("used_in", [])
@@ -1122,65 +1371,69 @@ def generate_claude_md(plc_data, hmi_data, hmi_path=""):
                 blocks_str = ", ".join(str(b) for b in block_list[:4])
                 if len(block_list) > 4:
                     blocks_str += f" (+{len(block_list)-4})"
-                lines.append(f"| {tag} | {blocks_str} |")
-            lines.append("")
+                sec.append(f"| {tag} | {blocks_str} |")
+            sec.append("")
 
-    if hmi_data:
-        hmi_bridge = build_hmi_plc_bridge(hmi_data)
-        if hmi_bridge:
-            screen_sorted = sorted(hmi_bridge.items(), key=lambda x: len(x[1]), reverse=True)
-            lines.append("### HMI <-> PLC Tag Bridge (top screens)")
-            lines.append("")
-            for screen, tags in screen_sorted[:10]:
-                tag_names = list(tags.keys())
-                if len(tag_names) <= 5:
-                    tags_str = ", ".join(f"`{t}`" for t in tag_names)
-                else:
-                    tags_str = ", ".join(f"`{t}`" for t in tag_names[:5])
-                    tags_str += f" (+{len(tag_names)-5})"
-                lines.append(f"- **{screen}** ({len(tag_names)} tags): {tags_str}")
-            lines.append("")
+            # Compact HMI Tag Bridge (append to same section)
+            if hmi_data:
+                bridge_lines = build_compact_hmi_bridge(hmi_data)
+                if bridge_lines:
+                    sec.append("### HMI <-> PLC Tag Bridge")
+                    sec.append("")
+                    sec.extend(bridge_lines)
+                    sec.append("")
 
-    # ===== 13. PLC Data Types (UDT/STRUCT) =====
+            add_section("Key Tags & HMI Bridge", sec)
+            tags_bridge_added = True
+
+    # Standalone HMI Tag Bridge if no PLC data
+    if hmi_data and not tags_bridge_added:
+        bridge_lines = build_compact_hmi_bridge(hmi_data)
+        if bridge_lines:
+            sec = ["## HMI <-> PLC Tag Bridge", ""]
+            sec.extend(bridge_lines)
+            sec.append("")
+            add_section("HMI <-> PLC Tag Bridge", sec)
+
+    # ===== 16. PLC Data Types =====
     if plc_data:
-        udt_blocks = [b for b in blocks if b.get("block_type") in ("STRUCT", "UDT")]
-        if udt_blocks:
+        udt_blocks_list = [b for b in blocks if b.get("block_type") in ("STRUCT", "UDT")]
+        if udt_blocks_list:
             udt_summary = build_udt_summary(blocks)
-            lines.append("## PLC Data Types (UDT/STRUCT)")
-            lines.append("")
+            sec = ["## PLC Data Types (UDT/STRUCT)", ""]
             for udt in udt_summary:
-                lines.append(f"### {udt['name']} ({udt['member_count']} members)")
-                lines.append("")
+                sec.append(f"### {udt['name']} ({udt['member_count']} members)")
+                sec.append("")
                 if udt["members"]:
-                    lines.append("| Member | Data Type | Comment |")
-                    lines.append("|--------|-----------|---------|")
+                    sec.append("| Member | Data Type | Comment |")
+                    sec.append("|--------|-----------|---------|")
                     for m in udt["members"]:
                         comment = m.get("comment", "")
-                        lines.append(f"| {m['name']} | {m['data_type']} | {comment} |")
-                    lines.append("")
+                        sec.append(f"| {m['name']} | {m['data_type']} | {comment} |")
+                    sec.append("")
+            add_section("PLC Data Types (UDT/STRUCT)", sec)
 
-    # ===== 14. Subsystem Overview =====
+    # ===== 17. Subsystem Overview =====
     if plc_data:
         subsystem_overview = build_subsystem_overview(blocks)
         if subsystem_overview and len(subsystem_overview) > 1:
-            lines.append("## Subsystem Overview")
-            lines.append("")
-            lines.append("Functional subsystems derived from program folder structure:")
-            lines.append("")
-            lines.append("| Subsystem | Blocks | Types | Key Executables |")
-            lines.append("|-----------|--------|-------|-----------------|")
+            sec = ["## Subsystem Overview", ""]
+            sec.append("Functional subsystems derived from program folder structure:")
+            sec.append("")
+            sec.append("| Subsystem | Blocks | Types | Key Executables |")
+            sec.append("|-----------|--------|-------|-----------------|")
             for name, info in subsystem_overview.items():
                 types_str = ", ".join(f"{c}x{t}" for t, c in info["types"].most_common(4))
                 key_str = ", ".join(info["key_blocks"][:3])
                 if len(info["key_blocks"]) > 3:
                     key_str += f" (+{len(info['key_blocks'])-3})"
-                lines.append(f"| {name} | {info['blocks']} | {types_str} | {key_str or '—'} |")
-            lines.append("")
+                sec.append(f"| {name} | {info['blocks']} | {types_str} | {key_str or '—'} |")
+            sec.append("")
+            add_section("Subsystem Overview", sec)
 
-    # ===== 15. Conventions =====
+    # ===== 18. Conventions =====
     if plc_data:
-        lines.append("## Conventions")
-        lines.append("")
+        sec = ["## Conventions", ""]
 
         i_tags = sum(1 for info in plc_tags.values()
                     if isinstance(info, dict) and re.match(r'^%I', info.get("address", "")))
@@ -1203,7 +1456,6 @@ def generate_claude_md(plc_data, hmi_data, hmi_path=""):
                 prefixes[parts[0]] += 1
         prefix_str = ", ".join(f"{p}_ ({c})" for p, c in prefixes.most_common(5))
 
-        # Block ranges
         by_type = defaultdict(list)
         for b in blocks:
             bnum = b.get("block_number")
@@ -1214,77 +1466,98 @@ def generate_claude_md(plc_data, hmi_data, hmi_path=""):
             nums = by_type[btype]
             range_parts.append(f"{btype}{min(nums)}–{btype}{max(nums)}")
 
-        lines.append(f"- Tags: UPPER_SNAKE_CASE, address prefixes I ({i_tags}), Q ({q_tags}), M ({m_tags})")
-        lines.append(f"- Tag tables: {tables_str}")
-        lines.append(f"- Blocks: UPPER_SNAKE_CASE, prefixes {prefix_str}")
-        lines.append(f"- DB ranges: {', '.join(range_parts)}")
+        sec.append(f"- Tags: UPPER_SNAKE_CASE, address prefixes I ({i_tags}), Q ({q_tags}), M ({m_tags})")
+        sec.append(f"- Tag tables: {tables_str}")
+        sec.append(f"- Blocks: UPPER_SNAKE_CASE, prefixes {prefix_str}")
+        sec.append(f"- DB ranges: {', '.join(range_parts)}")
 
-        # PLC types count
         udt_list = [b for b in blocks if b.get("block_type") in ("STRUCT", "UDT")]
         if udt_list:
             udt_names = ", ".join(b.get("block_name", "") for b in udt_list[:8])
             if len(udt_list) > 8:
                 udt_names += f" (+{len(udt_list)-8})"
-            lines.append(f"- PLC types ({len(udt_list)}): {udt_names}")
-        lines.append("")
+            sec.append(f"- PLC types ({len(udt_list)}): {udt_names}")
+        sec.append("")
+        add_section("Conventions", sec)
 
-    # ===== 16. Project Structure =====
+    # ===== 19. Project Structure =====
     if plc_data:
         folder_tree = build_folder_tree(blocks)
-        lines.append("## Project Structure")
-        lines.append("")
-        lines.append("```")
+        sec = ["## Project Structure", ""]
+        sec.append("```")
         for folder, block_names in sorted(folder_tree.items()):
             display = folder if folder != "/" else "(root)"
-            lines.append(f"{display}/")
+            sec.append(f"{display}/")
             for bn in sorted(block_names):
-                lines.append(f"  {bn}")
-        lines.append("```")
-        lines.append("")
+                sec.append(f"  {bn}")
+        sec.append("```")
+        sec.append("")
+        add_section("Project Structure", sec)
 
-    # ===== 17. Step Sequencers =====
+    # ===== 20. Step Sequencers =====
     if plc_data:
         sequencers = detect_step_sequencers(blocks)
         if sequencers:
-            lines.append("## Step Sequencers (State Machines)")
-            lines.append("")
-            lines.append("| Step DB | Sequence FC | Purpose |")
-            lines.append("|---------|-------------|---------|")
+            sec = ["## Step Sequencers (State Machines)", ""]
+            sec.append("| Step DB | Sequence FC | Purpose |")
+            sec.append("|---------|-------------|---------|")
             for s in sequencers:
                 if s["type"] == "DB":
                     continue
                 step_db = s.get("step_db", "") or s.get("comment", "")
-                lines.append(f"| {step_db or '—'} | {s['label']} ({s['language']}) | {s['comment'] or '—'} |")
-            lines.append("")
+                sec.append(f"| {step_db or '—'} | {s['label']} ({s['language']}) | {s['comment'] or '—'} |")
+            sec.append("")
+            add_section("Step Sequencers (State Machines)", sec)
 
-    # ===== 18. File Structure =====
-    lines.append("## File Structure (Doc_OUTPUT/)")
-    lines.append("")
-    lines.append("```")
-    lines.append("Doc_OUTPUT/")
-    lines.append("├── CLAUDE.md                              <- This file")
-    lines.append("├── Program_Blocks/                        <- PLC block .md reports")
+    # ===== 21. Data Sources =====
+    ds_lines = build_data_sources_report(plc_data, hmi_data, plc_path if plc_data else None, hmi_path)
+    if ds_lines:
+        sec = ["## Data Sources", ""]
+        sec.extend(ds_lines)
+        sec.append("")
+        add_section("Data Sources", sec)
+
+    # ===== 22. File Structure =====
+    fs_lines = ["## File Structure (Doc_OUTPUT/)", ""]
+    fs_lines.append("```")
+    fs_lines.append("Doc_OUTPUT/")
+    fs_lines.append("├── CLAUDE.md                              <- This file")
+    fs_lines.append("├── Program_Blocks/                        <- PLC block .md reports")
     if plc_data:
         udt_list = [b for b in blocks if b.get("block_type") in ("STRUCT", "UDT")]
         if udt_list:
-            lines.append("│   ├── PLC_Data_Types/                    <- UDT/STRUCT reports")
-    lines.append("│   └── PLC tags/                          <- plc_tags.md")
+            fs_lines.append("│   ├── PLC_Data_Types/                    <- UDT/STRUCT reports")
+    fs_lines.append("│   └── PLC tags/                          <- plc_tags.md")
     if hmi_data:
-        lines.append("├── hmi_screens/                           <- HMI screen .md reports + hmi_tags.md")
-    lines.append("├── .plc_cache.json                        <- PLC extraction cache")
+        fs_lines.append("├── hmi_screens/                           <- HMI screen .md reports + hmi_tags.md")
+    fs_lines.append("├── .plc_cache.json                        <- PLC extraction cache")
     if hmi_data and hmi_path:
         hmi_name = os.path.basename(hmi_path)
-        lines.append(f"└── {hmi_name:39s} <- HMI data")
-    lines.append("```")
-    lines.append("")
+        fs_lines.append(f"└── {hmi_name:39s} <- HMI data")
+    fs_lines.append("```")
+    fs_lines.append("")
+    add_section("File Structure (Doc_OUTPUT/)", fs_lines)
 
-    # ===== 19. Footer =====
-    lines.append("---")
-    lines.append("")
-    lines.append("*Auto-generated by `python src/generate_claudemd.py` — regenerate after PLC/HMI extraction.*")
-    lines.append(f"*Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
+    # ===== Assemble document with TOC =====
+    toc_lines = ["## Contents", ""]
+    for title, sec_lines in sections:
+        anchor = title.lower().replace(" ", "-").replace("(", "").replace(")", "").replace(",", "")
+        anchor = re.sub(r'[^a-z0-9-]', '', anchor)
+        toc_lines.append(f"- [{title}](#{anchor})")
+    toc_lines.append("")
 
-    return "\n".join(lines)
+    all_lines = list(header_lines)
+    all_lines.extend(toc_lines)
+    for title, sec_lines in sections:
+        all_lines.extend(sec_lines)
+
+    # Footer
+    all_lines.append("---")
+    all_lines.append("")
+    all_lines.append("*Auto-generated by `python src/generate_claudemd.py` — regenerate after PLC/HMI extraction.*")
+    all_lines.append(f"*Generated: {datetime.now().strftime('%Y-%m-%d %H:%M')}*")
+
+    return "\n".join(all_lines)
 
 
 # ---------------------------------------------------------------------------
