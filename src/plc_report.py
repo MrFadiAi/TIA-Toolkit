@@ -167,6 +167,15 @@ def generate_block_md(block, called_by=None, tag_xref=None, path_map=None, plc_t
     uda_readback = block.get("uda_enable_tag_readback", "")
     if uda_readback:
         lines.append(f"| UDA Tag Readback | {uda_readback} |")
+    load_mem = block.get("is_only_load_memory", "")
+    if load_mem:
+        lines.append(f"| Load Memory Only | {load_mem} |")
+    retain_mem = block.get("is_retain_mem_res", "")
+    if retain_mem:
+        lines.append(f"| Retain Mem Reserve | {retain_mem} |")
+    write_prot = block.get("is_write_protected", "")
+    if write_prot:
+        lines.append(f"| Write Protected | {write_prot} |")
     block_ns = block.get("namespace", "")
     if block_ns:
         lines.append(f"| Namespace | `{block_ns}` |")

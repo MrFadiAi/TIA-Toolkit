@@ -1266,6 +1266,9 @@ def parse_block_file(filepath, rel_path):
     memory_reserve = ""
     secondary_type = ""
     is_failsafe_compliant = ""
+    is_only_load_memory = ""
+    is_retain_mem_res = ""
+    is_write_protected = ""
 
     for child in block_elem:
         if strip_ns(child.tag) == "AttributeList":
@@ -1309,6 +1312,12 @@ def parse_block_file(filepath, rel_path):
                     set_eno_auto = (attr.text or "").strip()
                 elif attr_tag == "UDAEnableTagReadback":
                     uda_enable_tag_readback = (attr.text or "").strip()
+                elif attr_tag == "IsOnlyStoredInLoadMemory":
+                    is_only_load_memory = (attr.text or "").strip()
+                elif attr_tag == "IsRetainMemResEnabled":
+                    is_retain_mem_res = (attr.text or "").strip()
+                elif attr_tag == "IsWriteProtectedInAS":
+                    is_write_protected = (attr.text or "").strip()
                 elif attr_tag == "Namespace":
                     block_namespace = (attr.text or "").strip()
 
@@ -1445,6 +1454,9 @@ def parse_block_file(filepath, rel_path):
         "memory_reserve": memory_reserve,
         "secondary_type": secondary_type,
         "is_failsafe_compliant": is_failsafe_compliant,
+        "is_only_load_memory": is_only_load_memory,
+        "is_retain_mem_res": is_retain_mem_res,
+        "is_write_protected": is_write_protected,
         "engineering_version": engineering_version,
         "export_setting": export_setting,
         "created": created_timestamp,
