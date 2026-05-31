@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
+import { execSync } from 'child_process';
 
 export interface ToolkitConfig {
     toolkitPath: string;
@@ -12,10 +13,40 @@ export interface ToolkitConfig {
     workspaceDocOutput: string;
 }
 
+/** Cached Python resolution across getConfig() calls */
+let cachedPythonPath: string | undefined;
+
+/**
+ * Find a working Python executable.
+ * Tries in order: user config → python → py → python3.
+ * Probes each by running `python --version` to verify it actually works.
+ */
+function resolvePython(userSetting: string): string {
+    const candidates = [userSetting, 'python', 'py', 'python3']
+        .filter((v, i, a) => a.indexOf(v) === i);  // deduplicate
+
+    for (const candidate of candidates) {
+        try {
+            execSync(`${candidate} --version`, {
+                stdio: 'pipe',
+                timeout: 5000,
+                windowsHide: true,
+            });
+            return candidate;
+        } catch {
+            // not found or broken, try next
+        }
+    }
+
+    // Nothing worked — return the user setting and let the command fail
+    // with a clear error message the user can act on
+    return userSetting;
+}
+
 export function getConfig(): ToolkitConfig | undefined {
     const cfg = vscode.workspace.getConfiguration('tiaToolkit');
     const toolkitPath = cfg.get<string>('toolkitPath', '').trim();
-    const pythonPath = cfg.get<string>('pythonPath', 'py');
+    const userPython = cfg.get<string>('pythonPath', 'python');
     const autoSync = cfg.get<boolean>('autoSync', true);
 
     if (!toolkitPath) {
@@ -31,6 +62,12 @@ export function getConfig(): ToolkitConfig | undefined {
         );
         return undefined;
     }
+
+    // Resolve Python once per session (or until config changes)
+    if (!cachedPythonPath) {
+        cachedPythonPath = resolvePython(userPython);
+    }
+    const pythonPath = cachedPythonPath;
 
     const srcDir = path.join(toolkitPath, 'src');
     const docOutput = path.join(toolkitPath, 'Doc_OUTPUT');

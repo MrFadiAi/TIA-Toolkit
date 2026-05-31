@@ -23,7 +23,11 @@ export class CommandRunner {
         }
     }
 
-    async runSingle(
+    /**
+     * Internal spawn — no running guard (used by both runSingle and runChain).
+     * The running lock is managed by the public methods.
+     */
+    private _exec(
         cmd: string[],
         cwd: string,
         onOutput: OutputCallback
@@ -73,6 +77,22 @@ export class CommandRunner {
         });
     }
 
+    async runSingle(
+        cmd: string[],
+        cwd: string,
+        onOutput: OutputCallback
+    ): Promise<{ rc: number; output: string }> {
+        if (this.running) {
+            onOutput('Another command is still running. Please wait.');
+            return { rc: -1, output: '' };
+        }
+
+        this.running = true;
+        const result = await this._exec(cmd, cwd, onOutput);
+        this.running = false;
+        return result;
+    }
+
     async runChain(
         steps: CommandStep[],
         cwd: string,
@@ -96,7 +116,7 @@ export class CommandRunner {
                     onStepStart(i, label);
                 }
 
-                const result = await this.runSingle(
+                const result = await this._exec(
                     step.cmd,
                     step.cwd || cwd,
                     onOutput

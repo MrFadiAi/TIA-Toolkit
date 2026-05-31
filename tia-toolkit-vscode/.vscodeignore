@@ -1,9 +1,9 @@
 .vscode/**
-.vscode-test/**
+.omc/**
 src/**
 webview/**
 node_modules/**
-.gitignore
 tsconfig.json
-**/*.ts
 **/*.map
+.gitignore
+**/*.ts

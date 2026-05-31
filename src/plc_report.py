@@ -155,6 +155,52 @@ def generate_block_md(block, called_by=None, tag_xref=None, path_map=None, plc_t
         inst_type = block.get("instance_of_type", "")
         inst_label = f"{inst_type} " if inst_type else ""
         lines.append(f"| Instance Of | {inst_label}{inst_of} |")
+    auto_num = block.get("auto_number", "")
+    if auto_num:
+        lines.append(f"| Auto Number | {auto_num} |")
+    iec_check = block.get("iec_check_enabled", "")
+    if iec_check:
+        lines.append(f"| IEC Check | {iec_check} |")
+    set_eno = block.get("set_eno_automatically", "")
+    if set_eno:
+        lines.append(f"| Set ENO Auto | {set_eno} |")
+    uda_readback = block.get("uda_enable_tag_readback", "")
+    if uda_readback:
+        lines.append(f"| UDA Tag Readback | {uda_readback} |")
+    block_ns = block.get("namespace", "")
+    if block_ns:
+        lines.append(f"| Namespace | `{block_ns}` |")
+    eng_ver = block.get("engineering_version", "")
+    if eng_ver:
+        lines.append(f"| Engineering Version | {eng_ver} |")
+    sec_type = block.get("secondary_type", "")
+    if sec_type:
+        lines.append(f"| Secondary Type | {sec_type} |")
+    mem_reserve = block.get("memory_reserve", "")
+    if mem_reserve:
+        lines.append(f"| Memory Reserve | {mem_reserve} |")
+    failsafe = block.get("is_failsafe_compliant", "")
+    if failsafe:
+        lines.append(f"| Failsafe Compliant | {failsafe} |")
+    has_uda = block.get("has_uda_properties", False)
+    if has_uda:
+        lines.append(f"| UDA Properties | Yes |")
+    btitle = block.get("block_title", "")
+    if btitle:
+        lines.append(f"| Title | {btitle} |")
+    export_set = block.get("export_setting", "")
+    if export_set:
+        lines.append(f"| Export Setting | {export_set} |")
+    created_ts = block.get("created", "")
+    if created_ts:
+        lines.append(f"| Created | {created_ts} |")
+    cultures = block.get("cultures", [])
+    if cultures:
+        lines.append(f"| Cultures | {', '.join(cultures)} |")
+    installed = block.get("installed_products", [])
+    if installed:
+        prods = "; ".join(f"{p['name']} {p['version']}" for p in installed)
+        lines.append(f"| Installed Products | {prods} |")
     lines.append(f"| Interface vars | {block.get('interface_count', 0)} |")
     networks = block.get("networks", [])
     lines.append(f"| Networks | {len(networks)} |")
@@ -283,8 +329,8 @@ def _count_nested(member):
 def _render_members_md(lines, members, depth=0):
     """Render interface members as markdown table rows with all extracted fields."""
     if depth == 0:
-        lines.append("| Name | Data Type | Start Value | Remanence | Access | SetPoint | Version | Comment |")
-        lines.append("|------|-----------|-------------|-----------|--------|----------|---------|---------|")
+        lines.append("| Name | Data Type | Start Value | Remanence | Access | Ext-R | Ext-W | Ext-V | SetPoint | Version | Comment |")
+        lines.append("|------|-----------|-------------|-----------|--------|-------|-------|-------|----------|---------|---------|")
     for m in members:
         name = m.get("name", "")
         dtype = m.get("data_type", "")
@@ -296,11 +342,21 @@ def _render_members_md(lines, members, depth=0):
         informative = m.get("informative", "")
         setpoint = m.get("setpoint", "")
         sp_str = str(setpoint) if isinstance(setpoint, bool) else str(setpoint) if setpoint else ""
+        # ExternalAccess flags (OPC UA visibility)
+        ext_access = m.get("external_access", {})
+        ext_r = "✓" if ext_access.get("ExternalAccessible") else ""
+        ext_w = "✓" if ext_access.get("ExternalWritable") else ""
+        ext_v = "✓" if ext_access.get("ExternalVisible") else ""
         prefix = "&emsp;" * depth
+        # Show section name for sub-members of complex types (Input/Output/Static)
+        section_label = m.get("section", "")
+        if section_label and depth > 0:
+            sec_prefix = "&emsp;" * (depth - 1)
+            lines.append(f"| {sec_prefix}**{section_label}:** | | | | | | | | | | |")
         name_cell = f"{prefix}`{name}`"
         if informative:
             name_cell += " *(informative)*"
-        lines.append(f"| {name_cell} | {dtype} | {start_val} | {remanence} | {accessibility} | {sp_str} | {version} | {comment} |")
+        lines.append(f"| {name_cell} | {dtype} | {start_val} | {remanence} | {accessibility} | {ext_r} | {ext_w} | {ext_v} | {sp_str} | {version} | {comment} |")
         # Subelement values (array/struct element defaults)
         sub_vals = m.get("subelement_values", [])
         if sub_vals:
@@ -308,7 +364,7 @@ def _render_members_md(lines, members, depth=0):
             for sv in sub_vals:
                 sv_path = sv.get("path", "")
                 sv_val = sv.get("start_value", "")
-                lines.append(f"| {sv_prefix}`[{sv_path}]` | | {sv_val} | | | | | |")
+                lines.append(f"| {sv_prefix}`[{sv_path}]` | | {sv_val} | | | | | | | | | |")
         children = m.get("members", [])
         if children:
             _render_members_md(lines, children, depth + 1)

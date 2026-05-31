@@ -38,6 +38,9 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
 
         webviewView.webview.html = getWebviewHtml();
 
+        // Send default PLC output path to webview (matches gui.py behavior)
+        this.postMessage({ type: 'plcOutputPath', path: this.config.plcDataBlocks });
+
         webviewView.webview.onDidReceiveMessage(
             (msg) => this.handleMessage(msg),
             null,
@@ -122,6 +125,10 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
             case 'genClaudeMd':
                 await this.runSingle(['generate_claudemd.py'], async () => {
                     this.refreshReports();
+                    // Auto-load CLAUDE.md in report viewer (matches gui.py behavior)
+                    this.postMessage({ type: 'switchTab', tab: 'report' });
+                    this.postMessage({ type: 'selectReport', name: 'CLAUDE.md' });
+                    this.loadReport('CLAUDE.md');
                 });
                 break;
             case 'exportBundle':
@@ -228,7 +235,8 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
             { cmd: [exe, outPath, device], label: 'Export blocks from TIA Portal' },
             { cmd: [this.config.pythonPath, path.join(this.config.srcDir, 'extract_plc_full.py'), outPath, '--verbose', '--plc-name', device], label: 'Parse exported blocks' },
             { cmd: [this.config.pythonPath, path.join(this.config.srcDir, 'plc_report.py')], label: 'Generate PLC reports' },
-        ], this.config.srcDir, (text) => this.consoleLog(text));
+        ], this.config.srcDir, (text) => this.consoleLog(text),
+        (_i, label) => this.consoleLog(`\n── ${label} ──`));
 
         this.setProgress(false);
         await this.maybeSync();
@@ -241,7 +249,8 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
         await this.runner.runChain([
             { cmd: [this.config.pythonPath, path.join(this.config.srcDir, 'extract_plc_full.py'), outPath, '--verbose'], label: 'Parse blocks' },
             { cmd: [this.config.pythonPath, path.join(this.config.srcDir, 'plc_report.py')], label: 'Generate reports' },
-        ], this.config.srcDir, (text) => this.consoleLog(text));
+        ], this.config.srcDir, (text) => this.consoleLog(text),
+        (_i, label) => this.consoleLog(`\n── ${label} ──`));
 
         this.setProgress(false);
         await this.maybeSync();
@@ -252,10 +261,12 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
         const exe = getExtractExe(this.config.srcDir, this.tiaVersion);
         const jsonPath = path.join(this.config.docOutput, '.hmi_online_data.json');
 
+        // Full HMI pipeline: online extract → offline extract → merge → report
         await this.runner.runChain([
-            { cmd: [exe, jsonPath, device], label: 'Extract HMI data from TIA Portal' },
+            { cmd: [exe, jsonPath, device], label: 'Extract HMI online data from TIA Portal' },
             { cmd: [this.config.pythonPath, path.join(this.config.srcDir, 'hmi_report.py')], label: 'Generate HMI reports' },
-        ], this.config.srcDir, (text) => this.consoleLog(text));
+        ], this.config.srcDir, (text) => this.consoleLog(text),
+        (_i, label) => this.consoleLog(`\n── ${label} ──`));
 
         this.setProgress(false);
         await this.maybeSync();
@@ -349,8 +360,9 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
         if (!this.config.autoSync) { return; }
 
         const result = syncToWorkspace(this.config.docOutput, this.config.workspaceDocOutput);
-        if (result.copied > 0) {
-            this.consoleLog(`Synced ${result.copied} files to workspace Doc_OUTPUT/`);
+        // Always log sync result (including diagnostics and skip messages)
+        if (result.details.length > 0) {
+            this.consoleLog(`Sync: ${result.copied} files`);
             for (const detail of result.details) {
                 this.consoleLog(`  ${detail}`);
             }
@@ -418,12 +430,18 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
 
     private async extractHardware(): Promise<void> {
         const hwExe = getHardwareExe(this.config.srcDir);
+        if (!fs.existsSync(hwExe)) {
+            this.consoleLog('Hardware extractor not found. Compile it first (Step: Compile).');
+            this.setProgress(false);
+            return;
+        }
         const jsonPath = path.join(this.config.docOutput, '.hardware.json');
 
         await this.runner.runChain([
             { cmd: [hwExe, jsonPath], label: 'Extract hardware' },
             { cmd: [this.config.pythonPath, path.join(this.config.srcDir, 'hardware_report.py')], label: 'Generate report' },
-        ], this.config.srcDir, (text) => this.consoleLog(text));
+        ], this.config.srcDir, (text) => this.consoleLog(text),
+        (_i, label) => this.consoleLog(`\n── ${label} ──`));
 
         this.setProgress(false);
         await this.maybeSync();
@@ -465,10 +483,15 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
             }});
         }
 
-        // Hardware extraction
-        steps.push({ label: 'Hardware extraction', fn: async () => {
-            await this.extractHardware();
-        }});
+        // Hardware extraction (only if exe exists — matches gui.py behavior)
+        const hwExe = getHardwareExe(this.config.srcDir);
+        if (fs.existsSync(hwExe)) {
+            steps.push({ label: 'Hardware extraction', fn: async () => {
+                await this.extractHardware();
+            }});
+        } else {
+            this.consoleLog('Hardware extractor not found — skipping hardware step.');
+        }
 
         // Generate CLAUDE.md
         steps.push({ label: 'Generate CLAUDE.md', fn: async () => {

@@ -182,10 +182,14 @@ def _collect_members(sections_elem, result_list, depth):
     for section in sections_elem:
         if strip_ns(section.tag) != "Section":
             continue
+        section_name = section.get("Name", "")
         for item in section:
             tag = strip_ns(item.tag)
             if tag == "Member":
-                result_list.append(parse_member(item, depth + 1))
+                parsed = parse_member(item, depth + 1)
+                if section_name and section_name != "None":
+                    parsed["section"] = section_name
+                result_list.append(parsed)
             elif tag == "Sections":
                 # Nested Sections inside a Section (e.g., Section "Base" containing Sections)
                 _collect_members(item, result_list, depth)
@@ -282,6 +286,13 @@ def parse_member(member_elem, depth=0):
         result["informative"] = True
     if bool_attrs.get("SetPoint") is not None:
         result["setpoint"] = bool_attrs["SetPoint"]
+    # Preserve raw ExternalAccess flags for OPC UA / webserver visibility
+    ext_access = {}
+    for flag in ("ExternalAccessible", "ExternalVisible", "ExternalWritable"):
+        if flag in bool_attrs:
+            ext_access[flag] = bool_attrs[flag]
+    if ext_access:
+        result["external_access"] = ext_access
     if children:
         result["members"] = children
     if subelement_values:
@@ -387,13 +398,53 @@ def _reconstruct_access(access_elem, parts):
         return
 
     if scope == "LocalConstant":
+        # Look for <Constant Name="PI" /> (named constant reference)
+        for child in access_elem:
+            ctag = strip_ns(child.tag)
+            if ctag == "Constant":
+                cname = child.get("Name", "")
+                if cname:
+                    parts.append("#" + cname)
+                    return
         _reconstruct_symbol(access_elem, parts, global_var=False)
         return
+
+    if scope == "Address":
+        # Absolute address: <Address Area="DB" Type="DWord" BlockNumber="1002" BitOffset="64" />
+        for child in access_elem:
+            if strip_ns(child.tag) == "Address":
+                area = child.get("Area", "")
+                dtype = child.get("Type", "")
+                blk = child.get("BlockNumber", "")
+                offset_str = child.get("BitOffset", "0")
+                try:
+                    offset = int(offset_str)
+                except (ValueError, TypeError):
+                    offset = 0
+                if area == "DB" and blk:
+                    byte_off = offset // 8
+                    type_map = {"Bool": "X", "Byte": "B", "Word": "W", "DWord": "D"}
+                    tp = type_map.get(dtype, "B")
+                    if dtype == "Bool":
+                        parts.append(f"%DB{blk}.DB{tp}{byte_off}.{offset % 8}")
+                    else:
+                        parts.append(f"%DB{blk}.DB{tp}{byte_off}")
+                elif area in ("I", "Q", "M"):
+                    byte_off = offset // 8
+                    type_map = {"Bool": "", "Byte": "B", "Word": "W", "DWord": "D"}
+                    tp = type_map.get(dtype, "")
+                    if dtype == "Bool":
+                        parts.append(f"%{area}{byte_off}.{offset % 8}")
+                    else:
+                        parts.append(f"%{area}{tp}{byte_off}")
+                else:
+                    parts.append(f"[{area}:{dtype}@{offset}]")
+                return
 
     if scope == "Label":
         for child in access_elem:
             if strip_ns(child.tag) == "Label":
-                parts.append(child.get("Name", ""))
+                parts.append(child.get("Name", "") + ":")
         return
 
     if scope in ("LiteralConstant", "TypedConstant"):
@@ -455,21 +506,32 @@ def _collect_symbol_path(symbol_elem, parts, global_var):
         if tag == "Component":
             name = child.get("Name", "")
             has_quotes = False
+            # Check for array index children: Token "[" + Access + Token "]"
+            array_index = ""
             for attr in child:
-                if strip_ns(attr.tag) == "BooleanAttribute" and attr.get("Name") == "HasQuotes":
+                atag = strip_ns(attr.tag)
+                if atag == "BooleanAttribute" and attr.get("Name") == "HasQuotes":
                     has_quotes = attr.text == "true"
+                elif atag == "Token" and attr.get("Text") == "[":
+                    # Start of array index — collect until "]"
+                    array_index = _collect_array_index(child)
             if global_var and has_quotes:
                 segments.append(f'"{name}"')
             else:
-                segments.append(name)
+                seg = name
+                if array_index:
+                    seg += "[" + array_index + "]"
+                segments.append(seg)
         elif tag == "Token":
             tok = child.get("Text", "")
             if tok == ".":
                 pass  # dot separator handled by join
+            elif tok in ("[", "]"):
+                pass  # handled by Component children
             else:
                 segments.append(tok)
         elif tag == "Access" and child.get("AccessModifier") == "Array":
-            # Array access: [index]
+            # Array access: [index] via AccessModifier (older format)
             inner_parts = []
             for sub in child:
                 sub_tag = strip_ns(sub.tag)
@@ -480,6 +542,56 @@ def _collect_symbol_path(symbol_elem, parts, global_var):
             if segments:
                 segments[-1] += "[" + "".join(inner_parts) + "]"
     parts.append(".".join(segments))
+
+
+def _format_address(addr_elem):
+    """Format an <Address Area="DB" Type="DWord" BlockNumber="1002" BitOffset="64" /> element."""
+    area = addr_elem.get("Area", "")
+    dtype = addr_elem.get("Type", "")
+    blk = addr_elem.get("BlockNumber", "")
+    offset_str = addr_elem.get("BitOffset", "0")
+    try:
+        offset = int(offset_str)
+    except (ValueError, TypeError):
+        offset = 0
+    if area == "DB" and blk:
+        byte_off = offset // 8
+        type_map = {"Bool": "X", "Byte": "B", "Word": "W", "DWord": "D"}
+        tp = type_map.get(dtype, "B")
+        if dtype == "Bool":
+            return f"%DB{blk}.DB{tp}{byte_off}.{offset % 8}"
+        else:
+            return f"%DB{blk}.DB{tp}{byte_off}"
+    elif area in ("I", "Q", "M"):
+        byte_off = offset // 8
+        type_map = {"Bool": "", "Byte": "B", "Word": "W", "DWord": "D"}
+        tp = type_map.get(dtype, "")
+        if dtype == "Bool":
+            return f"%{area}{byte_off}.{offset % 8}"
+        else:
+            return f"%{area}{tp}{byte_off}"
+    else:
+        return f"[{area}:{dtype}@{offset}]"
+
+
+def _collect_array_index(component_elem):
+    """Extract array index from Component children: Token '[' + Access + Token ']'."""
+    index_parts = []
+    in_bracket = False
+    for child in component_elem:
+        tag = strip_ns(child.tag)
+        if tag == "Token":
+            tok = child.get("Text", "")
+            if tok == "[":
+                in_bracket = True
+                continue
+            elif tok == "]":
+                break
+            elif in_bracket:
+                index_parts.append(tok)
+        elif tag == "Access" and in_bracket:
+            _reconstruct_access(child, index_parts)
+    return "".join(index_parts)
 
 
 def _reconstruct_call(call_elem, parts):
@@ -525,8 +637,20 @@ def _reconstruct_call(call_elem, parts):
                         elif ptag == "NewLine":
                             num = param_child.get("Num")
                             parts.append("\n" * int(num) if num else "\n")
+                        elif ptag == "LineComment":
+                            for lc in param_child:
+                                if strip_ns(lc.tag) == "Text" and lc.text:
+                                    parts.append(f" // {lc.text}")
                     if not has_children:
                         parts.append(" := ")
+                    # Add Section/Type annotation for call parameters
+                    psection = sub.get("Section", "")
+                    ptype = sub.get("Type", "")
+                    if psection or ptype:
+                        label = f"{psection}" if psection else ""
+                        if ptype:
+                            label = f"{label}/{ptype}" if label else ptype
+                        parts.append(f"  [{label}]")
                 elif sub_tag == "NamelessParameter":
                     # Nested function call arguments (no name prefix)
                     for param_child in sub:
@@ -703,6 +827,22 @@ def reconstruct_stl(stl_elem):
                                                         val = find_ns(const, "ConstantValue")
                                                         if val is not None and val.text:
                                                             parts.append(val.text)
+                                            elif pc_scope == "Address":
+                                                for addr in pc:
+                                                    if strip_ns(addr.tag) == "Address":
+                                                        parts.append(_format_address(addr))
+                                        elif pc_tag == "LineComment":
+                                            for txt in pc:
+                                                if strip_ns(txt.tag) == "Text" and txt.text:
+                                                    parts.append(f" // {txt.text}")
+                                    # Add Section/Type annotation for call parameters
+                                    psection = param.get("Section", "")
+                                    ptype = param.get("Type", "")
+                                    if psection or ptype:
+                                        label = f"{psection}" if psection else ""
+                                        if ptype:
+                                            label = f"{label}/{ptype}" if label else ptype
+                                        parts.append(f"  [{label}]")
                         elif sub_tag == "Instruction":
                             instr_name = sub.get("Name", "")
                             if instr_name:
@@ -1117,6 +1257,15 @@ def parse_block_file(filepath, rel_path):
     instance_of_name = ""
     instance_of_type = ""
     comment = ""
+    auto_number = ""
+    iec_check_enabled = ""
+    set_eno_auto = ""
+    uda_enable_tag_readback = ""
+    block_namespace = ""
+    engineering_version = ""
+    memory_reserve = ""
+    secondary_type = ""
+    is_failsafe_compliant = ""
 
     for child in block_elem:
         if strip_ns(child.tag) == "AttributeList":
@@ -1130,6 +1279,8 @@ def parse_block_file(filepath, rel_path):
                     prog_language = (attr.text or "").strip()
                 elif attr_tag == "MemoryLayout":
                     memory_layout = (attr.text or "").strip()
+                elif attr_tag == "MemoryReserve":
+                    memory_reserve = (attr.text or "").strip()
                 elif attr_tag == "HeaderAuthor":
                     header_author = (attr.text or "").strip()
                 elif attr_tag == "HeaderFamily":
@@ -1138,6 +1289,10 @@ def parse_block_file(filepath, rel_path):
                     header_name = (attr.text or "").strip()
                 elif attr_tag == "HeaderVersion":
                     header_version = (attr.text or "").strip()
+                elif attr_tag == "SecondaryType":
+                    secondary_type = (attr.text or "").strip()
+                elif attr_tag == "IsFailsafeCompliant":
+                    is_failsafe_compliant = (attr.text or "").strip()
                 elif attr_tag == "DBAccessibleFromOPCUA":
                     db_opc_ua = (attr.text or "").strip()
                 elif attr_tag == "DBAccessibleFromWebserver":
@@ -1146,9 +1301,64 @@ def parse_block_file(filepath, rel_path):
                     instance_of_name = (attr.text or "").strip()
                 elif attr_tag == "InstanceOfType":
                     instance_of_type = (attr.text or "").strip()
+                elif attr_tag == "AutoNumber":
+                    auto_number = (attr.text or "").strip()
+                elif attr_tag == "IsIECCheckEnabled":
+                    iec_check_enabled = (attr.text or "").strip()
+                elif attr_tag == "SetENOAutomatically":
+                    set_eno_auto = (attr.text or "").strip()
+                elif attr_tag == "UDAEnableTagReadback":
+                    uda_enable_tag_readback = (attr.text or "").strip()
+                elif attr_tag == "Namespace":
+                    block_namespace = (attr.text or "").strip()
 
-    # Comment and Title from MultilingualText
+    # Block ID attribute (from block element, e.g. SW.Blocks.FC ID="0")
+    block_id = block_elem.get("ID", "")
+
+    # Extract DocumentInfo from root level
+    export_setting = ""
+    created_timestamp = ""
+    installed_products = []
+    for child in root:
+        tag = strip_ns(child.tag)
+        if tag == "Engineering":
+            engineering_version = (child.get("version", "") or "").strip()
+        elif tag == "DocumentInfo":
+            for di in child:
+                di_tag = strip_ns(di.tag)
+                if di_tag == "Created":
+                    created_timestamp = (di.text or "").strip()
+                elif di_tag == "ExportSetting":
+                    export_setting = (di.text or "").strip()
+                elif di_tag == "InstalledProducts":
+                    for prod in di:
+                        ptag = strip_ns(prod.tag)
+                        if ptag in ("Product", "OptionPackage"):
+                            pname = ""
+                            pver = ""
+                            for pf in prod:
+                                pftag = strip_ns(pf.tag)
+                                if pftag == "DisplayName":
+                                    pname = (pf.text or "").strip()
+                                elif pftag == "DisplayVersion":
+                                    pver = (pf.text or "").strip()
+                            if pname:
+                                installed_products.append(
+                                    {"name": pname, "version": pver, "type": "option" if ptag == "OptionPackage" else "product"}
+                                )
+
+    # Check UDABlockProperties (empty element vs has children)
+    has_uda_properties = False
+    for child in block_elem:
+        if strip_ns(child.tag) == "AttributeList":
+            for attr in child:
+                if strip_ns(attr.tag) == "UDABlockProperties":
+                    has_uda_properties = len(list(attr)) > 0
+                    break
+
+    # Comment, Title, and Culture info from MultilingualText
     block_title = ""
+    cultures = set()
     for child in block_elem:
         if strip_ns(child.tag) == "ObjectList":
             for obj in child:
@@ -1168,6 +1378,8 @@ def parse_block_file(filepath, rel_path):
                                                     culture = (af.text or "").strip()
                                         elif ftag == "Text":
                                             text = (field.text or "").strip()
+                                    if culture:
+                                        cultures.add(culture)
                                     if culture == "en-US" and text:
                                         if comp_name == "Title":
                                             block_title = text
@@ -1223,6 +1435,21 @@ def parse_block_file(filepath, rel_path):
         "db_webserver": db_webserver,
         "instance_of_name": instance_of_name,
         "instance_of_type": instance_of_type,
+        "auto_number": auto_number,
+        "iec_check_enabled": iec_check_enabled,
+        "set_eno_automatically": set_eno_auto,
+        "uda_enable_tag_readback": uda_enable_tag_readback,
+        "has_uda_properties": has_uda_properties,
+        "namespace": block_namespace,
+        "block_id": block_id,
+        "memory_reserve": memory_reserve,
+        "secondary_type": secondary_type,
+        "is_failsafe_compliant": is_failsafe_compliant,
+        "engineering_version": engineering_version,
+        "export_setting": export_setting,
+        "created": created_timestamp,
+        "installed_products": installed_products,
+        "cultures": sorted(cultures),
         "comment": comment,
         "block_title": block_title,
         "folder": folder,

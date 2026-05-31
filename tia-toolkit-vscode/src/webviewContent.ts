@@ -113,6 +113,7 @@ var savedPlcOutput = savedState.plcOutput || '';
 var savedPlcConsole = savedState.plcConsole || [];
 var savedHmiConsole = savedState.hmiConsole || [];
 var savedAnalysisConsole = savedState.analysisConsole || [];
+var currentReport = savedState.currentReport || '';
 
 function saveState() {
     vscode.setState({
@@ -121,6 +122,7 @@ function saveState() {
         plc: savedPlc,
         hmi: savedHmi,
         plcOutput: savedPlcOutput,
+        currentReport: currentReport,
         plcConsole: savedPlcConsole,
         hmiConsole: savedHmiConsole,
         analysisConsole: savedAnalysisConsole
@@ -268,6 +270,7 @@ document.getElementById('btn-refresh-reports').addEventListener('click', functio
     action('refreshReports');
 });
 document.getElementById('report-select').addEventListener('change', function(e) {
+    currentReport = e.target.value; saveState();
     action('loadReport', { name: e.target.value });
 });
 document.getElementById('btn-open-editor').addEventListener('click', function() {
@@ -331,6 +334,11 @@ window.addEventListener('message', function(event) {
                     opt.textContent = f.name;
                     sel.appendChild(opt);
                 });
+                // Auto-load first report only if none was previously selected (matches gui.py)
+                if (!currentReport) {
+                    sel.selectedIndex = 0;
+                    vscode.postMessage({ type: 'loadReport', name: msg.files[0].name });
+                }
             }
             break;
         case 'reportContent':
@@ -342,6 +350,11 @@ window.addEventListener('message', function(event) {
             break;
         case 'switchTab':
             switchTab(msg.tab);
+            break;
+        case 'selectReport':
+            var reportSel = document.getElementById('report-select');
+            if (reportSel) { reportSel.value = msg.name; }
+            currentReport = msg.name; saveState();
             break;
     }
 });

@@ -7,6 +7,13 @@ import * as vscode from 'vscode';
  */
 function copyDirRecursive(src: string, dst: string): number {
     if (!fs.existsSync(src)) { return 0; }
+    // Guard: never delete dst if it resolves to the same physical directory as src.
+    // This prevents wiping the source on Windows when drive-letter casing differs.
+    try {
+        if (fs.realpathSync(path.resolve(dst)) === fs.realpathSync(path.resolve(src))) {
+            return 0; // Same directory — nothing to copy
+        }
+    } catch { /* dst may not exist yet, which is fine */ }
     if (fs.existsSync(dst)) {
         fs.rmSync(dst, { recursive: true, force: true });
     }
@@ -39,7 +46,18 @@ export function syncToWorkspace(toolkitDocOutput: string, workspaceDocOutput: st
     let copied = 0;
 
     // Skip sync if toolkit and workspace are the same directory
-    if (path.resolve(toolkitDocOutput) === path.resolve(workspaceDocOutput)) {
+    // Use realpathSync to resolve symlinks/junctions, and lower-case comparison
+    // on Windows (drive letter casing can differ between uri.fsPath and settings).
+    const resolveReal = (p: string) => {
+        const resolved = path.resolve(p);
+        try { return fs.realpathSync(resolved).toLowerCase(); }
+        catch { return resolved.toLowerCase(); }
+    };
+    const realTk = resolveReal(toolkitDocOutput);
+    const realWs = resolveReal(workspaceDocOutput);
+    details.push(`[diag] toolkit: ${toolkitDocOutput} → ${realTk}`);
+    details.push(`[diag] workspace: ${workspaceDocOutput} → ${realWs}`);
+    if (realTk === realWs) {
         return { copied: 0, details: ['Skipped — workspace is toolkit directory'] };
     }
 
