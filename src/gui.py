@@ -240,9 +240,17 @@ class TiaToolkitApp(ctk.CTk):
         f3 = ctk.CTkFrame(p)
         f3.grid(row=4, column=0, sticky="ew", pady=5)
         ctk.CTkLabel(f3, text="Step 3: Parse & Generate Report", font=ctk.CTkFont(weight="bold")).grid(row=0, column=0, columnspan=3, sticky="w", padx=10, pady=(8, 4))
-        ctk.CTkButton(f3, text="Parse Blocks", width=140, command=self._parse_plc).grid(row=1, column=0, padx=10, pady=6)
-        ctk.CTkButton(f3, text="Generate Report", width=140, command=self._gen_plc_report).grid(row=1, column=1, padx=5, pady=6)
-        ctk.CTkButton(f3, text="View Report", width=120, command=lambda: self.show_page("report")).grid(row=1, column=2, padx=5, pady=6)
+        # Output mode selector — determines which files to keep after export
+        self.plc_output_mode = ctk.StringVar(value="md")
+        ctk.CTkSegmentedButton(
+            f3,
+            values=["xml", "md", "both"],
+            variable=self.plc_output_mode,
+            font=ctk.CTkFont(size=11),
+        ).grid(row=1, column=0, padx=10, pady=6)
+        ctk.CTkButton(f3, text="Parse Blocks", width=140, command=self._parse_plc).grid(row=2, column=0, padx=10, pady=6)
+        ctk.CTkButton(f3, text="Generate Report", width=140, command=self._gen_plc_report).grid(row=2, column=1, padx=5, pady=6)
+        ctk.CTkButton(f3, text="View Report", width=120, command=lambda: self.show_page("report")).grid(row=2, column=2, padx=5, pady=6)
 
         # Console
         self._build_console(p, row=5, name="plc")
@@ -339,11 +347,39 @@ class TiaToolkitApp(ctk.CTk):
             self.log("Parse failed. Cannot generate markdown reports.")
             return
         self.log("Generating PLC markdown reports...")
-        self.run_command([PYTHON, os.path.join(SCRIPT_DIR, "plc_report.py")])
+        self.run_command([PYTHON, os.path.join(SCRIPT_DIR, "plc_report.py")],
+                         on_complete=lambda rc2, _: self._on_report_done(rc2))
 
     def _gen_plc_report(self):
         self.clear_console()
         self.run_command([PYTHON, os.path.join(SCRIPT_DIR, "plc_report.py")])
+
+    def _on_report_done(self, rc):
+        """Called after plc_report.py finishes — cleanup unwanted output."""
+        if rc != 0:
+            self.log("Report generation failed.")
+            return
+        mode = self.plc_output_mode.get() if hasattr(self, 'plc_output_mode') else "md"
+        self._cleanup_plc_output(mode)
+
+    def _cleanup_plc_output(self, mode):
+        """Remove unwanted PLC output based on the user's output mode selection."""
+        xml_dir = os.path.join(DOC_OUTPUT, "DATA_Program blocks")
+        md_dir = os.path.join(DOC_OUTPUT, "Program_Blocks")
+        if mode == "md":
+            if os.path.exists(xml_dir):
+                shutil.rmtree(xml_dir)
+                self.log("Kept MD reports, removed XML source.")
+            else:
+                self.log("Export complete (MD reports only).")
+        elif mode == "xml":
+            if os.path.exists(md_dir):
+                shutil.rmtree(md_dir)
+                self.log("Kept XML source, removed MD reports.")
+            else:
+                self.log("Export complete (XML source only).")
+        else:  # "both"
+            self.log("Export complete (kept both XML source and MD reports).")
 
     # ═══════════════════════════════════════════════════════════════════
     # HMI PAGE
@@ -712,32 +748,22 @@ class TiaToolkitApp(ctk.CTk):
 
         cf = ctk.CTkFrame(p)
         cf.grid(row=0, column=0, sticky="ew", pady=(0, 5))
-        cf.grid_columnconfigure(1, weight=1)
-
-        # View mode selector: XML Source / MD Reports / Both
-        self.report_view_mode = ctk.StringVar(value="md")
-        ctk.CTkSegmentedButton(
-            cf,
-            values=["xml", "md", "both"],
-            variable=self.report_view_mode,
-            command=self._on_view_mode_change,
-            font=ctk.CTkFont(size=11),
-        ).grid(row=0, column=0, padx=(10, 5), pady=6)
+        cf.grid_columnconfigure(0, weight=1)
 
         self.report_file_var = ctk.StringVar()
         self.report_dd = ctk.CTkOptionMenu(cf, variable=self.report_file_var, values=["-- no reports --"],
                                            command=self._load_report)
-        self.report_dd.grid(row=0, column=1, padx=5, pady=6, sticky="ew")
-        ctk.CTkButton(cf, text="Refresh", width=100, command=self._refresh_reports).grid(row=0, column=2, padx=5, pady=6)
-        ctk.CTkButton(cf, text="Open in Editor", width=130, command=self._open_editor).grid(row=0, column=3, padx=5, pady=6)
-        ctk.CTkButton(cf, text="Generate CLAUDE.md", width=160, command=self._gen_claudemd).grid(row=0, column=4, padx=5, pady=6)
-        ctk.CTkButton(cf, text="Export Bundle", width=130, command=self._export_bundle).grid(row=0, column=5, padx=5, pady=6)
+        self.report_dd.grid(row=0, column=0, padx=5, pady=6, sticky="ew")
+        ctk.CTkButton(cf, text="Refresh", width=100, command=self._refresh_reports).grid(row=0, column=1, padx=5, pady=6)
+        ctk.CTkButton(cf, text="Open in Editor", width=130, command=self._open_editor).grid(row=0, column=2, padx=5, pady=6)
+        ctk.CTkButton(cf, text="Generate CLAUDE.md", width=160, command=self._gen_claudemd).grid(row=0, column=3, padx=5, pady=6)
+        ctk.CTkButton(cf, text="Export Bundle", width=130, command=self._export_bundle).grid(row=0, column=4, padx=5, pady=6)
 
         self.report_text = ctk.CTkTextbox(p, font=ctk.CTkFont(family="Consolas", size=12), wrap="none")
         self.report_text.grid(row=1, column=0, sticky="nsew")
 
     def _refresh_reports(self):
-        mode = self.report_view_mode.get() if hasattr(self, 'report_view_mode') else "md"
+        mode = self.plc_output_mode.get() if hasattr(self, 'plc_output_mode') else "md"
         files = scan_reports(mode)
         if not files:
             self.report_dd.configure(values=["-- no reports --"])
@@ -754,10 +780,6 @@ class TiaToolkitApp(ctk.CTk):
         if not self.report_file_var.get() or self.report_file_var.get().startswith("--"):
             self.report_file_var.set(names[0])
             self._load_report(names[0])
-
-    def _on_view_mode_change(self, value):
-        """Called when the report view mode selector changes."""
-        self._refresh_reports()
 
     def _load_report(self, name=None):
         if name is None or name.startswith("--"):

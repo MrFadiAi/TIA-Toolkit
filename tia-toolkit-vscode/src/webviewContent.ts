@@ -114,7 +114,7 @@ var savedPlcConsole = savedState.plcConsole || [];
 var savedHmiConsole = savedState.hmiConsole || [];
 var savedAnalysisConsole = savedState.analysisConsole || [];
 var currentReport = savedState.currentReport || '';
-var reportViewMode = savedState.reportViewMode || 'md';
+var plcOutputMode = savedState.plcOutputMode || 'md';
 window.__reportFiles = [];
 
 function saveState() {
@@ -125,7 +125,7 @@ function saveState() {
         hmi: savedHmi,
         plcOutput: savedPlcOutput,
         currentReport: currentReport,
-        reportViewMode: reportViewMode,
+        plcOutputMode: plcOutputMode,
         plcConsole: savedPlcConsole,
         hmiConsole: savedHmiConsole,
         analysisConsole: savedAnalysisConsole
@@ -152,16 +152,15 @@ document.querySelectorAll('.seg-btn').forEach(function(btn) {
     btn.addEventListener('click', function() { setVersion(btn.dataset.version); vscode.postMessage({ type: 'setVersion', version: tiaVersion }); });
 });
 
-function setReportViewMode(mode) {
-    reportViewMode = mode;
-    document.querySelectorAll('#report-view-mode .seg-btn').forEach(function(b) {
-        b.classList.toggle('active', b.dataset.view === mode);
+function setPlcOutputMode(mode) {
+    plcOutputMode = mode;
+    document.querySelectorAll('#plc-output-mode .seg-btn').forEach(function(b) {
+        b.classList.toggle('active', b.dataset.mode === mode);
     });
     saveState();
-    vscode.postMessage({ type: 'setReportViewMode', mode: mode });
 }
-document.querySelectorAll('#report-view-mode .seg-btn').forEach(function(btn) {
-    btn.addEventListener('click', function() { setReportViewMode(btn.dataset.view); });
+document.querySelectorAll('#plc-output-mode .seg-btn').forEach(function(btn) {
+    btn.addEventListener('click', function() { setPlcOutputMode(btn.dataset.mode); });
 });
 
 function action(type, payload) {
@@ -252,11 +251,11 @@ document.getElementById('btn-export-blocks').addEventListener('click', function(
     var device = document.getElementById('plc-device-select').value;
     var outputPath = document.getElementById('plc-output-path').value;
     if (!device) { appendConsole('Select a PLC device first.'); return; }
-    clearConsole(); setProgress(true); action('exportBlocks', { device: device, outputPath: outputPath });
+    clearConsole(); setProgress(true); action('exportBlocks', { device: device, outputPath: outputPath, plcOutputMode: plcOutputMode });
 });
 document.getElementById('btn-parse-blocks').addEventListener('click', function() {
     var outputPath = document.getElementById('plc-output-path').value;
-    clearConsole(); setProgress(true); action('parseBlocks', { outputPath: outputPath });
+    clearConsole(); setProgress(true); action('parseBlocks', { outputPath: outputPath, plcOutputMode: plcOutputMode });
 });
 document.getElementById('btn-gen-plc-report').addEventListener('click', function() {
     clearConsole(); setProgress(true); action('genPlcReport');
@@ -383,7 +382,7 @@ window.addEventListener('message', function(event) {
 // ── Restore state on load ──────────────────────────────────────────────
 if (savedState.tiaVersion) setVersion(savedState.tiaVersion);
 if (savedState.activeTab) switchTab(savedState.activeTab);
-if (savedState.reportViewMode) setReportViewMode(savedState.reportViewMode);
+if (savedState.plcOutputMode) setPlcOutputMode(savedState.plcOutputMode);
 if (savedPlc.length > 0 || savedHmi.length > 0) populateDevices(savedPlc, savedHmi);
 if (savedPlcOutput) document.getElementById('plc-output-path').value = savedPlcOutput;
 savedPlcConsole.forEach(function(l) {
@@ -448,6 +447,13 @@ const HTML = `<!DOCTYPE html>
             </div>
             <div class="step-group">
                 <div class="step-header">Step 3: Parse &amp; Report</div>
+                <div class="step-row" style="margin-bottom:4px">
+                    <div class="version-selector" id="plc-output-mode">
+                        <button class="seg-btn" data-mode="xml">XML Source</button>
+                        <button class="seg-btn active" data-mode="md">MD Reports</button>
+                        <button class="seg-btn" data-mode="both">Both</button>
+                    </div>
+                </div>
                 <div class="step-row">
                     <button class="btn" id="btn-parse-blocks">Parse</button>
                     <button class="btn" id="btn-gen-plc-report">Report</button>
@@ -494,11 +500,6 @@ const HTML = `<!DOCTYPE html>
                 <select class="select select-wide" id="report-select"><option value="">-- no reports --</option></select>
             </div>
             <div class="step-row" style="margin-bottom:6px">
-                <div class="version-selector" id="report-view-mode" style="margin-right:8px">
-                    <button class="seg-btn" data-view="xml">XML Source</button>
-                    <button class="seg-btn active" data-view="md">MD Reports</button>
-                    <button class="seg-btn" data-view="both">Both</button>
-                </div>
                 <button class="btn" id="btn-refresh-reports">Refresh</button>
                 <button class="btn" id="btn-open-editor">Open</button>
                 <button class="btn" id="btn-gen-claudemd">CLAUDE.md</button>

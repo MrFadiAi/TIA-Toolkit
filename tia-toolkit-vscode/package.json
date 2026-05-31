@@ -2,7 +2,7 @@
   "name": "tia-toolkit-vscode",
   "displayName": "TIA Toolkit",
   "description": "Extract PLC/HMI data from Siemens TIA Portal projects",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "publisher": "tia-toolkit",
   "engines": {
     "vscode": "^1.85.0"

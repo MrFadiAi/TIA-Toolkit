@@ -14,7 +14,7 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
     private readonly runner = new CommandRunner();
     private config: ToolkitConfig;
     private tiaVersion = 'V21+';
-    private reportViewMode = 'md';
+    private plcOutputMode = 'md';
     private resolved = false;
     private disposables: vscode.Disposable[] = [];
 
@@ -94,9 +94,11 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
                 await this.browsePlcOutput();
                 break;
             case 'exportBlocks':
+                if (msg.plcOutputMode) { this.plcOutputMode = msg.plcOutputMode; }
                 await this.exportBlocks(msg.device, msg.outputPath);
                 break;
             case 'parseBlocks':
+                if (msg.plcOutputMode) { this.plcOutputMode = msg.plcOutputMode; }
                 await this.parseBlocks(msg.outputPath);
                 break;
             case 'genPlcReport':
@@ -119,10 +121,6 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
                 break;
             case 'loadReport':
                 this.loadReport(msg.name, msg.fullPath);
-                break;
-            case 'setReportViewMode':
-                this.reportViewMode = msg.mode;
-                this.refreshReports();
                 break;
             case 'openInEditor':
                 this.openInEditor(msg.name);
@@ -243,6 +241,7 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
         ], this.config.srcDir, (text) => this.consoleLog(text),
         (_i, label) => this.consoleLog(`\n── ${label} ──`));
 
+        this.cleanupPlcOutput(this.plcOutputMode);
         this.setProgress(false);
         await this.maybeSync();
     }
@@ -257,6 +256,7 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
         ], this.config.srcDir, (text) => this.consoleLog(text),
         (_i, label) => this.consoleLog(`\n── ${label} ──`));
 
+        this.cleanupPlcOutput(this.plcOutputMode);
         this.setProgress(false);
         await this.maybeSync();
     }
@@ -301,9 +301,9 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
     // ── Report viewer ───────────────────────────────────────────────────
 
     private refreshReports(): void {
-        const reports = scanReports(this.config.docOutput, this.reportViewMode);
+        const reports = scanReports(this.config.docOutput, this.plcOutputMode);
         const wsReports = this.config.autoSync
-            ? scanReports(this.config.workspaceDocOutput, this.reportViewMode)
+            ? scanReports(this.config.workspaceDocOutput, this.plcOutputMode)
             : [];
 
         const files = wsReports.length > 0 ? wsReports : reports;
@@ -550,6 +550,22 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
             if (fs.existsSync(p)) { fs.unlinkSync(p); }
         }
         this.consoleLog('Cleaned old PLC output.');
+    }
+
+    private cleanupPlcOutput(mode: string): void {
+        /** Remove unwanted PLC output based on the user's output mode selection. */
+        const doc = this.config.docOutput;
+        const xmlDir = path.join(doc, 'DATA_Program blocks');
+        const mdDir = path.join(doc, 'Program_Blocks');
+        if (mode === 'md') {
+            if (fs.existsSync(xmlDir)) { fs.rmSync(xmlDir, { recursive: true, force: true }); }
+            this.consoleLog('Kept MD reports, removed XML source.');
+        } else if (mode === 'xml') {
+            if (fs.existsSync(mdDir)) { fs.rmSync(mdDir, { recursive: true, force: true }); }
+            this.consoleLog('Kept XML source, removed MD reports.');
+        } else {
+            this.consoleLog('Export complete (kept both XML source and MD reports).');
+        }
     }
 
     private cleanHmiOutput(): void {
