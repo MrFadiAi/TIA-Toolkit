@@ -123,6 +123,18 @@ def generate_block_md(block, called_by=None, tag_xref=None, path_map=None, plc_t
     block_title = block.get("block_title", "")
     if block_title:
         lines.append(f"| Title | {block_title} |")
+    block_text = block.get("block_text", "")
+    if block_text:
+        lines.append(f"| Block Text | {block_text} |")
+    cyclic_time = block.get("cyclic_time", "")
+    if cyclic_time:
+        lines.append(f"| Cyclic Time | {cyclic_time} |")
+    phase_offset = block.get("phase_offset", "")
+    if phase_offset:
+        lines.append(f"| Phase Offset | {phase_offset} |")
+    sys_lib_ver = block.get("system_lib_version", "")
+    if sys_lib_ver:
+        lines.append(f"| System Lib Version | {sys_lib_ver} |")
     if bfolder:
         lines.append(f"| Folder | {bfolder} |")
     source_file = block.get("source_file", "")
@@ -194,9 +206,6 @@ def generate_block_md(block, called_by=None, tag_xref=None, path_map=None, plc_t
     has_uda = block.get("has_uda_properties", False)
     if has_uda:
         lines.append(f"| UDA Properties | Yes |")
-    btitle = block.get("block_title", "")
-    if btitle:
-        lines.append(f"| Title | {btitle} |")
     export_set = block.get("export_setting", "")
     if export_set:
         lines.append(f"| Export Setting | {export_set} |")
@@ -456,6 +465,43 @@ def generate_tags_md(data, path_map=None, tags_relpath=None):
             usage = info.get("used_in", [])
             lines.append(f"| `{tag_name}` | {addr} | {dtype} | {', '.join(usage[:8])} |")
         lines.append("")
+
+    # Tags by Tag Table
+    plc_tags = data.get("plc_tags", {})
+    if plc_tags:
+        # Group tags by their table name
+        table_groups = {}
+        for tag_name, tag_info in plc_tags.items():
+            table = tag_info.get("table", "Unknown")
+            if table not in table_groups:
+                table_groups[table] = []
+            table_groups[table].append((tag_name, tag_info))
+
+        # Include empty tag tables from the tag_table_names list
+        all_table_names = data.get("tag_table_names", [])
+        for tn in all_table_names:
+            if tn not in table_groups:
+                table_groups[tn] = []
+
+        lines.append("## Tags by Table")
+        lines.append("")
+        for table_name in sorted(table_groups.keys()):
+            table_tags = table_groups[table_name]
+            if table_tags:
+                lines.append(f"### {table_name} ({len(table_tags)})")
+                lines.append("")
+                lines.append("| Tag | Address | Data Type | Comment |")
+                lines.append("|-----|---------|-----------|---------|")
+                for tag_name, tag_info in sorted(table_tags, key=lambda x: x[0]):
+                    addr = tag_info.get("address", "")
+                    dtype = tag_info.get("data_type", "")
+                    comment = tag_info.get("comment", "")
+                    lines.append(f"| `{tag_name}` | {addr} | {dtype} | {comment} |")
+            else:
+                lines.append(f"### {table_name} (0)")
+                lines.append("")
+                lines.append("*Empty tag table.*")
+            lines.append("")
 
     return "\n".join(lines)
 

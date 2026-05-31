@@ -1128,9 +1128,10 @@ def classify_references(global_refs):
 def parse_tag_tables(tags_dir):
     """Parse all PLC tag table XML files in directory."""
     all_tags = {}
+    tag_tables = []  # List of all table names (including empty ones)
 
     if not os.path.isdir(tags_dir):
-        return all_tags
+        return all_tags, tag_tables
 
     for f in sorted(os.listdir(tags_dir)):
         if not f.lower().endswith(".xml"):
@@ -1157,6 +1158,8 @@ def parse_tag_tables(tags_dir):
 
         if not table_name:
             table_name = os.path.splitext(f)[0]
+
+        tag_tables.append(table_name)
 
         # Parse tags — elements are named SW.Tags.PlcTag (not namespaced)
         for tag_elem in root.iter():
@@ -1223,7 +1226,7 @@ def parse_tag_tables(tags_dir):
                     "comment": comment,
                 }
 
-    return all_tags
+    return all_tags, tag_tables
 
 
 # ---------------------------------------------------------------------------
@@ -1269,6 +1272,10 @@ def parse_block_file(filepath, rel_path):
     is_only_load_memory = ""
     is_retain_mem_res = ""
     is_write_protected = ""
+    block_text = ""
+    cyclic_time = ""
+    phase_offset = ""
+    system_lib_version = ""
 
     for child in block_elem:
         if strip_ns(child.tag) == "AttributeList":
@@ -1320,6 +1327,14 @@ def parse_block_file(filepath, rel_path):
                     is_write_protected = (attr.text or "").strip()
                 elif attr_tag == "Namespace":
                     block_namespace = (attr.text or "").strip()
+                elif attr_tag == "Text":
+                    block_text = (attr.text or "").strip()
+                elif attr_tag == "CyclicTime":
+                    cyclic_time = (attr.text or "").strip()
+                elif attr_tag == "PhaseOffset":
+                    phase_offset = (attr.text or "").strip()
+                elif attr_tag == "OfSystemLibVersion":
+                    system_lib_version = (attr.text or "").strip()
 
     # Block ID attribute (from block element, e.g. SW.Blocks.FC ID="0")
     block_id = block_elem.get("ID", "")
@@ -1385,6 +1400,8 @@ def parse_block_file(filepath, rel_path):
                                             for af in field:
                                                 if strip_ns(af.tag) == "Culture":
                                                     culture = (af.text or "").strip()
+                                                elif strip_ns(af.tag) == "Text":
+                                                    text = (af.text or "").strip()
                                         elif ftag == "Text":
                                             text = (field.text or "").strip()
                                     if culture:
@@ -1457,6 +1474,10 @@ def parse_block_file(filepath, rel_path):
         "is_only_load_memory": is_only_load_memory,
         "is_retain_mem_res": is_retain_mem_res,
         "is_write_protected": is_write_protected,
+        "block_text": block_text,
+        "cyclic_time": cyclic_time,
+        "phase_offset": phase_offset,
+        "system_lib_version": system_lib_version,
         "engineering_version": engineering_version,
         "export_setting": export_setting,
         "created": created_timestamp,
@@ -1560,11 +1581,14 @@ def main():
 
     # --- Parse tag tables ---
     print(f"\n--- Loading PLC tag tables ---")
-    plc_tags = parse_tag_tables(tags_dir)
-    print(f" Loaded {len(plc_tags)} PLC tags")
+    plc_tags, tag_table_names = parse_tag_tables(tags_dir)
+    print(f" Loaded {len(plc_tags)} PLC tags from {len(tag_table_names)} tables")
 
     # Also parse tag tables found in the blocks directory (AI, DI, etc.)
-    inline_tags = parse_tag_tables(blocks_path)
+    inline_tags, inline_table_names = parse_tag_tables(blocks_path)
+    for tn in inline_table_names:
+        if tn not in tag_table_names:
+            tag_table_names.append(tn)
     merged = 0
     for name, detail in inline_tags.items():
         if name not in plc_tags:
@@ -1665,6 +1689,7 @@ def main():
         "called_by": call_reverse,
         "tag_xref": resolved_tags,
         "plc_tags": {k: v for k, v in sorted(plc_tags.items())},
+        "tag_table_names": sorted(tag_table_names),
         "blocks": blocks,
     }
 
