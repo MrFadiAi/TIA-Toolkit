@@ -220,6 +220,7 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
     }
 
     private async exportBlocks(device: string, outputPath: string): Promise<void> {
+        this.cleanPlcOutput();
         const exe = getExportExe(this.config.srcDir, this.tiaVersion);
         const outPath = outputPath || this.config.plcDataBlocks;
 
@@ -234,6 +235,7 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
     }
 
     private async parseBlocks(outputPath: string): Promise<void> {
+        this.cleanPlcOutput();
         const outPath = outputPath || this.config.plcDataBlocks;
 
         await this.runner.runChain([
@@ -246,6 +248,7 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
     }
 
     private async extractHmi(device: string): Promise<void> {
+        this.cleanHmiOutput();
         const exe = getExtractExe(this.config.srcDir, this.tiaVersion);
         const jsonPath = path.join(this.config.docOutput, '.hmi_online_data.json');
 
@@ -429,6 +432,7 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
     // ── Full Pipeline ──────────────────────────────────────────────────
 
     private async runFullPipeline(plcDevice: string, hmiDevice: string): Promise<void> {
+        this.cleanAllOutput();
         const steps: { label: string; fn: () => Promise<void> }[] = [];
 
         // 1. Export PLC blocks
@@ -487,6 +491,56 @@ export class ToolkitViewProvider implements vscode.WebviewViewProvider {
         this.setProgress(false);
         this.consoleLog(`\nPipeline complete (${total} steps).`);
         await this.maybeSync();
+    }
+
+    // ── Cleanup ──────────────────────────────────────────────────────────
+
+    private cleanPlcOutput(): void {
+        const doc = this.config.docOutput;
+        const dirs = ['DATA_Program blocks', 'Program_Blocks'];
+        const files = ['.plc_cache.json'];
+        for (const d of dirs) {
+            const p = path.join(doc, d);
+            if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); }
+        }
+        for (const f of files) {
+            const p = path.join(doc, f);
+            if (fs.existsSync(p)) { fs.unlinkSync(p); }
+        }
+        this.consoleLog('Cleaned old PLC output.');
+    }
+
+    private cleanHmiOutput(): void {
+        const doc = this.config.docOutput;
+        const dirs = ['hmi_screens'];
+        const files = ['.hmi_online_data.json', '.hmi_offline_data.json', '.hmi_merged.json'];
+        for (const d of dirs) {
+            const p = path.join(doc, d);
+            if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); }
+        }
+        for (const f of files) {
+            const p = path.join(doc, f);
+            if (fs.existsSync(p)) { fs.unlinkSync(p); }
+        }
+        this.consoleLog('Cleaned old HMI output.');
+    }
+
+    private cleanAllOutput(): void {
+        this.cleanPlcOutput();
+        this.cleanHmiOutput();
+        // Also clean analysis and hardware
+        const doc = this.config.docOutput;
+        const dirs = ['analysis'];
+        const files = ['.hardware.json'];
+        for (const d of dirs) {
+            const p = path.join(doc, d);
+            if (fs.existsSync(p)) { fs.rmSync(p, { recursive: true, force: true }); }
+        }
+        for (const f of files) {
+            const p = path.join(doc, f);
+            if (fs.existsSync(p)) { fs.unlinkSync(p); }
+        }
+        this.consoleLog('Cleaned all old output.');
     }
 
     public dispose(): void {
